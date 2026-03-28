@@ -1,0 +1,11 @@
+{
+  "status": "START",
+  "issue_id": null,
+  "issue_title": null,
+  "generated_code_path": null,
+  "test_result": null,
+  "pr_url": null,
+  "iteration": 0,
+  "last_run": null,
+  "errors": []
+}

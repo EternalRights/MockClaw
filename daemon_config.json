@@ -1,83 +1,105 @@
 {
   "daemon_name": "MockClaw Immortal Daemon",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "author": "Yang Quanheng (via Qclaw Daemon)",
-  "created_at": "2026-03-29T01:08:00Z",
+  "created_at": "2026-03-29T01:15:00Z",
+  "updated_at": "2026-03-29T01:20:00Z",
   "status": "ACTIVE",
+  
+  "optimization_notes": "Redesigned to use SINGLE TASK with internal self-healing logic. Avoids concurrent task conflicts (Qclaw maxConcurrentRuns=1). Uses cron expression for precise timing.",
   
   "tasks": [
     {
-      "id": "753996f9-05fc-49c7-9917-bb56e51f1d4f",
-      "name": "immortal_main",
-      "type": "recurring",
-      "interval": "1 hour",
-      "description": "Main evolution loop - runs janitor, generate, chaos, polish, validate",
+      "id": "2edfe8f9-2b90-4e23-81cb-6fb89251847a",
+      "name": "immortal_evolution",
+      "type": "cron",
+      "schedule": "0 * * * * (every hour at :00)",
+      "timezone": "Asia/Shanghai",
+      "stagger_ms": 300000,
+      "description": "Single evolution loop with internal self-healing",
       "timeout_seconds": 600,
-      "work_directory": "D:\\mockclaw-immortal",
-      "on_complete": "reschedule_self",
-      "on_failure": "trigger_immortal_repair"
-    },
-    {
-      "id": "01dfda6a-4a62-4190-b886-d63598601c00",
-      "name": "immortal_watchdog",
-      "type": "recurring",
-      "interval": "30 minutes",
-      "description": "Monitors main task for heartbeat",
-      "timeout_seconds": 120,
-      "trigger_condition": "no_heartbeat_15min"
-    },
-    {
-      "id": "b71f85fe-4271-4bc1-a174-e590be2e03c1",
-      "name": "immortal_repair",
-      "type": "recurring",
-      "interval": "2 hours",
-      "description": "Analyzes failures, generates patches, triggers restart",
-      "timeout_seconds": 300,
-      "trigger_condition": "on_failure_of_immortal_main"
+      "delivery_mode": "none",
+      
+      "internal_phases": [
+        {
+          "phase": 1,
+          "name": "janitor",
+          "description": "Clean Docker, delete mocks, clear cache",
+          "timeout": "60s"
+        },
+        {
+          "phase": 2,
+          "name": "generate",
+          "description": "Read flow.har, generate mock code, start Docker",
+          "timeout": "120s"
+        },
+        {
+          "phase": 3,
+          "name": "chaos",
+          "description": "Run adversarial tests (concurrency, garbage data)",
+          "timeout": "120s"
+        },
+        {
+          "phase": 4,
+          "name": "self_check",
+          "description": "If chaos failed: analyze logs, apply patches",
+          "timeout": "60s",
+          "condition": "on_failure"
+        },
+        {
+          "phase": 5,
+          "name": "polish",
+          "description": "Run linting, update docs",
+          "timeout": "60s"
+        },
+        {
+          "phase": 6,
+          "name": "validate",
+          "description": "Check /health and /mockclaw/info exist",
+          "timeout": "30s"
+        },
+        {
+          "phase": 7,
+          "name": "heartbeat",
+          "description": "Write timestamp to logs/heartbeat.log",
+          "timeout": "10s"
+        }
+      ]
     }
   ],
   
-  "execution_flow": {
-    "normal_cycle": [
-      "immortal_main runs every hour",
-      "immortal_watchdog checks every 30 minutes",
-      "If all OK, repeat"
-    ],
-    "failure_cycle": [
-      "immortal_main fails",
-      "immortal_watchdog detects no heartbeat",
-      "immortal_repair triggered",
-      "Patches generated and applied",
-      "immortal_main restarted"
-    ]
+  "schedule_design": {
+    "rationale": "Qclaw has maxConcurrentRuns=1, so multiple tasks would queue and potentially delay each other. Using a single task with internal phases ensures sequential execution without conflicts.",
+    "timing": {
+      "main_task": "Every hour at :00 (with 5min stagger)",
+      "self_healing": "Internal - triggered if chaos phase fails",
+      "no_separate_watchdog": "Not needed - self-check built into main task"
+    }
   },
   
   "logs": {
     "heartbeat": "D:\\mockclaw-immortal\\logs\\heartbeat.log",
     "evolution": "D:\\mockclaw-immortal\\logs\\evolution_history.md",
     "crash": "D:\\mockclaw-immortal\\logs\\crash_history.log",
-    "repair": "D:\\mockclaw-immortal\\logs\\repair_history.log"
+    "repair": "D:\\mockclaw-immortal\\logs\\repair_history.log",
+    "agent": "D:\\mockclaw-immortal\\logs\\agent.log"
   },
   
   "critical_test_case": {
     "endpoint": "POST /checkout",
     "payload": {"coupon_code": "EXPIRED2026"},
     "expected_status": 400,
-    "description": "The gauntlet validates this error handling"
-  },
-  
-  "self_healing": {
-    "retry_logic": "Exponential backoff, max 3 retries",
-    "watchdog_timeout": "600 seconds",
-    "auto_respawn": true,
-    "patch_persistence": "logs/patches.json"
+    "description": "The gauntlet validates this error handling is preserved"
   },
   
   "chaos_engineering": {
     "concurrency_test": "50 parallel requests",
     "garbage_data": ["nulls", "5000-char strings", "XSS", "SQL injection"],
-    "docker_kill": true,
-    "network_drop": true,
-    "disk_full": true
-  }
+    "docker_kill": "simulated",
+    "network_drop": "simulated",
+    "disk_full": "simulated"
+  },
+  
+  "next_run": "1774720961541 (timestamp)",
+  "status": "DAEMON ACTIVE - SINGLE TASK MODE"
 }
