@@ -1,169 +1,197 @@
-# MockClaw 🥋
+# MockClaw
 
-[![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python&logoColor=white)](https://python.org)
-[![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
-[![Docker](https://img.shields.io/badge/Docker-Ready-blue?logo=docker&logoColor=white)](https://docker.com)
+[![Python](https://img.shields.io/badge/Python-3.11-blue.svg)](https://python.org)
+[![Docker](https://img.shields.io/badge/Docker-Ready-1d63ed.svg)](https://docker.com)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**Watch HTTP traffic, generate Mock APIs instantly with AI.**
+AI-powered HTTP traffic recorder and mock server generator.
 
-![MockClaw Demo](docs/demo.png)
+## Features
 
-## ✨ Features
+- Automatic HAR parsing and endpoint detection
+- LLM-based API specification generation
+- Dockerized mock server deployment
+- Interactive API documentation with OpenAPI
+- Real-time traffic analysis dashboard
 
-- 🎣 **Traffic Recording** - Capture HTTP traffic via HAR files or Curl commands
-- 🧠 **AI-Powered Generation** - LLM-based mock code generation with realistic fake data
-- 🐳 **Dockerized Mock Servers** - One-command deployment of generated mocks
-- 📄 **Interactive API Docs** - Built-in OpenAPI documentation with "Try it out"
-- 🎨 **Beautiful Dashboard** - Modern 2026-style UI with dark/light themes
-
-## 📸 Screenshots
-
-| Traffic Ingestion | Mock Factory |
-|:---:|:---:|
-| ![Traffic Tab](docs/screenshots/traffic.png) | ![Factory Tab](docs/screenshots/factory.png) |
-
-| Docker Lab | API Docs |
-|:---:|:---:|
-| ![Docker Tab](docs/screenshots/docker.png) | ![Docs Tab](docs/screenshots/docs.png) |
-
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
-- Python 3.11+
-- Node.js 18+
-- Docker (optional, for containerized mocks)
+- Python 3.11 or higher
+- Node.js 18 or higher
+- Docker (optional)
 
-### One-Command Start
+### Installation
 
 ```bash
-# Clone the repository
+# Clone repository
 git clone https://github.com/EternalRights/MockClaw.git
 cd MockClaw
 
-# Start all services
-docker-compose up -d
+# Install dependencies
+pip install -r src/requirements.txt
+cd web && npm install && cd ..
 
-# Or start manually:
-# Terminal 1 - Backend
-cd src && pip install -r requirements.txt && python brain.py
-
-# Terminal 2 - Frontend
-cd web && npm install && npm run dev
-
-# Open in browser
-open http://localhost:3000
+# Configure environment
+cp .env.example .env
+# Edit .env with your LLM API credentials
 ```
 
-### Windows Quick Start
+### Running
 
-```batch
-# Run the startup script
-start.bat
-```
-
-### Linux/Mac Quick Start
+**Option 1: Docker Compose**
 
 ```bash
-# Run the startup script
-chmod +x start.sh
+docker-compose up -d
+```
+
+**Option 2: Manual Start**
+
+```bash
+# Terminal 1 - Backend
+python src/brain.py
+
+# Terminal 2 - Frontend
+cd web && npm run dev
+```
+
+**Option 3: Startup Script**
+
+```bash
+# Windows
+start.bat
+
+# Linux/Mac
 ./start.sh
 ```
 
-## 🛠️ Configuration
+Access the dashboard at http://localhost:3000
 
-### Environment Variables
+## Architecture
 
-Copy `.env.example` to `.env` and configure:
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│   HAR File   │────▶│    Parser    │────▶│  Endpoints   │
+└──────────────┘     └──────────────┘     └──────────────┘
+                                                 │
+                                                 ▼
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│ Mock Server  │◀────│  Generator   │◀────│     LLM      │
+└──────────────┘     └──────────────┘     └──────────────┘
+```
 
-```bash
-# LLM Provider: openai, claude, or ollama
+**Components:**
+
+- **Parser** (`src/core/parser.py`) - Extracts HTTP endpoints from HAR files
+- **Generator** (`src/core/generator.py`) - Creates FastAPI mock code using LLM
+- **Brain** (`src/brain.py`) - REST API server for frontend integration
+- **Dashboard** (`web/`) - Next.js web interface
+
+## Configuration
+
+Set environment variables in `.env`:
+
+```
 LLM_PROVIDER=openai
-LLM_API_KEY=sk-your-api-key
+LLM_API_KEY=sk-your-key
 LLM_BASE_URL=https://api.openai.com/v1
 MODEL_NAME=gpt-4o-mini
 ```
 
-### LLM Providers
+Supported providers: `openai`, `claude`, `ollama`
 
-MockClaw supports multiple LLM providers:
+## API Reference
 
-| Provider | LLM_PROVIDER | Requirements |
-|----------|--------------|--------------|
-| OpenAI | `openai` | `LLM_API_KEY` |
-| Anthropic Claude | `claude` | `LLM_API_KEY` |
-| Ollama (Local) | `ollama` | Ollama running locally |
+### Backend Endpoints
 
-## 📖 How It Works
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | Health check |
+| GET | `/mockclaw/info` | Service metadata |
+| POST | `/parse` | Parse HAR file |
+| POST | `/generate` | Generate mock for endpoint |
+| POST | `/generate-all` | Batch generation |
+| GET | `/endpoints` | List parsed endpoints |
+| GET | `/logs` | Get generation logs |
 
+### Example Usage
+
+```python
+import requests
+
+# Parse HAR file
+with open('traffic.har', 'rb') as f:
+    response = requests.post('http://localhost:8000/parse', files={'file': f})
+    endpoints = response.json()['endpoints']
+
+# Generate mock
+for endpoint in endpoints:
+    requests.post('http://localhost:8000/generate', 
+                  json={'endpoint_id': endpoint['id']})
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  HAR File   │────▶│   Parser    │────▶│  Endpoints  │
-└─────────────┘     └─────────────┘     └─────────────┘
-                                               │
-                                               ▼
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│ Mock Server │◀────│   Generator │◀────│    LLM      │
-└─────────────┘     └─────────────┘     └─────────────┘
-```
 
-1. **Capture Traffic** - Export HAR from browser DevTools or use mitmproxy
-2. **Parse** - Extract endpoints, methods, headers, and response schemas
-3. **Generate** - AI creates FastAPI mock code with Faker data
-4. **Deploy** - Run generated mocks as Docker containers
-
-## 🎯 Use Cases
-
-- **Frontend Development** - Mock APIs before backend is ready
-- **Testing** - Generate consistent test data
-- **Demos** - Create realistic API responses for presentations
-- **API Design** - Prototype endpoints from specifications
-
-## 🏗️ Architecture
+## Project Structure
 
 ```
 MockClaw/
-├── src/                    # Python Backend
-│   ├── brain.py            # FastAPI server
+├── src/
+│   ├── brain.py           # FastAPI backend server
+│   ├── main.py            # CLI interface
 │   ├── core/
-│   │   ├── parser.py       # HAR parser
-│   │   └── generator.py    # LLM generator
+│   │   ├── parser.py      # HAR parser
+│   │   └── generator.py   # LLM generator
 │   └── requirements.txt
-├── web/                    # Next.js Frontend
-│   ├── app/                # App Router pages
-│   ├── components/         # React components
-│   │   ├── ui/             # shadcn/ui components
-│   │   └── dashboard/      # Dashboard tabs
+├── web/
+│   ├── app/               # Next.js app router
+│   ├── components/        # React components
 │   └── package.json
-├── docker-compose.yml      # Multi-service orchestration
-└── .env.example            # Environment template
+├── tests/                 # Test suite
+├── docker-compose.yml     # Container orchestration
+├── .env.example           # Environment template
+└── README.md
 ```
 
-## 🤝 Contributing
+## Development
 
-Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details.
+### Running Tests
+
+```bash
+pytest tests/
+```
+
+### Code Style
+
+- Python: PEP 8, type hints required
+- TypeScript: ESLint configuration in `web/`
+
+### Building for Production
+
+```bash
+# Backend
+pip install -r src/requirements.txt
+
+# Frontend
+cd web && npm run build
+```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'feat: Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+2. Create a feature branch
+3. Make your changes
+4. Run tests
+5. Submit a pull request
 
-## 📝 License
+## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
-- [FastAPI](https://fastapi.tiangolo.com/) - Modern Python web framework
-- [Next.js](https://nextjs.org/) - React framework for production
-- [shadcn/ui](https://ui.shadcn.com/) - Beautiful UI components
-- [Faker](https://faker.readthedocs.io/) - Fake data generation
-- [Recharts](https://recharts.org/) - Charting library
-
----
-
-<p align="center">
-  Made with ❤️ by <a href="https://github.com/EternalRights">EternalRights</a>
-</p>
+- FastAPI - Web framework
+- Next.js - Frontend framework
+- shadcn/ui - UI components
+- Faker - Test data generation
