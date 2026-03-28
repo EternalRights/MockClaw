@@ -2,135 +2,53 @@
   "daemon_name": "MockClaw Night Shift",
   "version": "4.0.0",
   "author": "Yang Quanheng (Night Shift Architect)",
-  "created_at": "2026-03-29T01:25:00Z",
+  "created_at": "2026-03-29T01:45:00Z",
   "status": "ACTIVE",
+  "total_tasks": 15,
   
-  "schedule_design": {
-    "rationale": "Tasks are scheduled with 30-minute gaps to prevent overlap (Qclaw maxConcurrentRuns=1). Each task passes state via state.json file.",
+  "schedule": {
     "timezone": "Asia/Shanghai",
-    "window": "02:00 - 03:30 daily"
+    "window": "02:00 - 09:00 (7 hours)",
+    "interval": "30 minutes between tasks"
   },
   
   "tasks": [
-    {
-      "id": "7d1a384b-940a-44c7-aef4-8c5db96f2a49",
-      "name": "night_shift_architect",
-      "phase": "GREEN",
-      "schedule": "0 2 * * * (02:00 AM daily)",
-      "timeout": "30 minutes",
-      "input_status": "START",
-      "output_status": "CODE_GENERATED",
-      "responsibilities": [
-        "Search GitHub for playwright-python issues",
-        "Select 'good first issue' + 'area: tests'",
-        "Generate pytest code",
-        "Start Docker server"
-      ]
-    },
-    {
-      "id": "d9e32f3e-b1d4-48bc-8f4f-8e4ac5403772",
-      "name": "night_shift_breaker",
-      "phase": "YELLOW",
-      "schedule": "30 2 * * * (02:30 AM daily)",
-      "timeout": "30 minutes",
-      "input_status": "CODE_GENERATED",
-      "output_status_pass": "READY_FOR_PR",
-      "output_status_fail": "FAILED",
-      "responsibilities": [
-        "Run 50 parallel requests",
-        "Inject garbage data",
-        "Test edge cases",
-        "Validate assertions"
-      ]
-    },
-    {
-      "id": "933dcc8a-c149-4066-b69a-26db2ea75c67",
-      "name": "night_shift_publisher",
-      "phase": "ORANGE",
-      "schedule": "0 3 * * * (03:00 AM daily)",
-      "timeout": "30 minutes",
-      "input_status": "READY_FOR_PR",
-      "output_status": "PR_SUBMITTED",
-      "responsibilities": [
-        "Run pytest validation",
-        "Create GitHub PR",
-        "Attach evidence",
-        "Log PR URL"
-      ]
-    },
-    {
-      "id": "b9d9865c-a187-4c19-9cdb-d98e24aa709d",
-      "name": "night_shift_janitor",
-      "phase": "RED",
-      "schedule": "30 3 * * * (03:30 AM daily)",
-      "timeout": "30 minutes",
-      "input_status": "ANY",
-      "output_status": "START",
-      "responsibilities": [
-        "Stop Docker containers",
-        "Clean generated mocks",
-        "Reset state.json",
-        "Archive results"
-      ]
-    }
+    {"time": "02:00", "name": "ns_01_architect",    "phase": "ROUND1", "role": "Find issue #1"},
+    {"time": "02:30", "name": "ns_02_breaker",      "phase": "ROUND1", "role": "Test issue #1"},
+    {"time": "03:00", "name": "ns_03_publisher",    "phase": "ROUND1", "role": "Submit PR #1"},
+    {"time": "03:30", "name": "ns_04_janitor",      "phase": "ROUND1", "role": "Cleanup round 1"},
+    {"time": "04:00", "name": "ns_05_reviewer",     "phase": "ROUND2", "role": "Check CI status"},
+    {"time": "04:30", "name": "ns_06_fixer",        "phase": "ROUND2", "role": "Fix CI failures"},
+    {"time": "05:00", "name": "ns_07_enhancer",     "phase": "ROUND2", "role": "Add documentation"},
+    {"time": "05:30", "name": "ns_08_architect2",    "phase": "ROUND3", "role": "Find issue #2"},
+    {"time": "06:00", "name": "ns_09_breaker2",     "phase": "ROUND3", "role": "Test issue #2"},
+    {"time": "06:30", "name": "ns_10_publisher2",    "phase": "ROUND3", "role": "Submit PR #2"},
+    {"time": "07:00", "name": "ns_11_social",        "phase": "ROUND4", "role": "Community interaction"},
+    {"time": "07:30", "name": "ns_12_research",      "phase": "ROUND4", "role": "Learn new patterns"},
+    {"time": "08:00", "name": "ns_13_blog",          "phase": "ROUND4", "role": "Write daily summary"},
+    {"time": "08:30", "name": "ns_14_report",        "phase": "ROUND4", "role": "Generate statistics"},
+    {"time": "09:00", "name": "ns_15_final_janitor", "phase": "END",    "role": "Final cleanup"}
   ],
   
-  "state_transitions": {
-    "START": {
-      "next_status": "CODE_GENERATED",
-      "triggered_by": "architect",
-      "on_success": "breaker runs at 02:30"
-    },
-    "CODE_GENERATED": {
-      "next_status": "READY_FOR_PR or FAILED",
-      "triggered_by": "breaker",
-      "on_pass": "publisher runs at 03:00",
-      "on_fail": "skip publisher, janitor cleans up"
-    },
-    "READY_FOR_PR": {
-      "next_status": "PR_SUBMITTED",
-      "triggered_by": "publisher",
-      "on_success": "janitor runs at 03:30"
-    },
-    "FAILED": {
-      "next_status": "START",
-      "triggered_by": "janitor",
-      "action": "reset and retry next night"
-    }
+  "daily_goals": {
+    "issues": 2,
+    "prs": 2,
+    "lines_of_code": "varies",
+    "documentation": "added",
+    "blog_posts": 1
+  },
+  
+  "github_target": {
+    "repository": "microsoft/playwright-python",
+    "labels": ["good first issue", "area: tests"],
+    "branch_prefix": "mockclaw-night-shift/"
   },
   
   "files": {
     "state": "D:\\mockclaw-immortal\\state.json",
-    "logs": {
-      "night_shift": "D:\\mockclaw-immortal\\logs\\night_shift.log",
-      "chaos_results": "D:\\mockclaw-immortal\\logs\\chaos_results.log",
-      "pr_submissions": "D:\\mockclaw-immortal\\logs\\pr_submissions.log"
-    },
-    "generated_mocks": "D:\\mockclaw-immortal\\generated_mocks\\"
+    "logs": "D:\\mockclaw-immortal\\logs\\",
+    "generated": "D:\\mockclaw-immortal\\generated_mocks\\"
   },
   
-  "github_config": {
-    "target_repo": "microsoft/playwright-python",
-    "issue_labels": ["good first issue", "area: tests"],
-    "branch_prefix": "mockclaw-night-shift/",
-    "pr_template": {
-      "title": "test: add regression test for {issue_title}",
-      "body": "Closes #{issue_id}. Generated by MockClaw Night Shift."
-    }
-  },
-  
-  "chaos_engineering": {
-    "concurrency": 50,
-    "garbage_data": ["nulls", "5000-char strings", "XSS", "SQL injection"],
-    "edge_cases": ["empty body", "unicode", "special chars"]
-  },
-  
-  "prerequisites": [
-    "Docker must be running",
-    "GitHub token must be valid",
-    "Internet connection required",
-    "state.json must exist with status='START'"
-  ],
-  
-  "next_run": "02:00 AM Asia/Shanghai"
+  "next_run": "Tonight at 02:00 AM Asia/Shanghai"
 }

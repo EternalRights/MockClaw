@@ -1,15 +1,49 @@
-# MockClaw Night Shift Log
-# Auto-generated log of nightly autonomous operations
+# MockClaw Night Shift Log - FULL SCHEDULE
 
-[2026-03-29T01:25:00] NIGHT SHIFT MODE ACTIVATED
-[2026-03-29T01:25:00] Schedule configured:
-  - Architect: 02:00 (Find issue, generate code)
-  - Breaker: 02:30 (Run chaos tests)
-  - Publisher: 03:00 (Submit PR if tests pass)
-  - Janitor: 03:30 (Cleanup and reset)
-
-[2026-03-29T01:25:00] State: START
-[2026-03-29T01:25:00] Iteration: 0
-[2026-03-29T01:25:00] Ready for first run at 02:00 AM
+[2026-03-29T01:45:00] NIGHT SHIFT v4.0 - FULL SCHEDULE CONFIGURED
+[2026-03-29T01:45:00] Total Tasks: 15 (02:00 - 09:00)
+[2026-03-29T01:45:00] Timezone: Asia/Shanghai (GMT+8)
 
 ---
+## NIGHT SHIFT SCHEDULE (7 Hours)
+
+### ROUND 1: First Contribution (02:00 - 03:30)
+[02:00] ns_01_architect    - Find issue #1, generate code
+[02:30] ns_02_breaker      - Run chaos tests on issue #1
+[03:00] ns_03_publisher    - Submit PR #1 if tests pass
+[03:30] ns_04_janitor      - Cleanup round 1
+
+### ROUND 2: CI & Fixes (04:00 - 05:00)
+[04:00] ns_05_reviewer     - Check CI status, handle feedback
+[04:30] ns_06_fixer        - Fix CI failures if any
+[05:00] ns_07_enhancer     - Add documentation, improve code
+
+### ROUND 3: Second Contribution (05:30 - 06:30)
+[05:30] ns_08_architect2   - Find issue #2, generate code
+[06:00] ns_09_breaker2     - Run chaos tests on issue #2
+[06:30] ns_10_publisher2   - Submit PR #2 if tests pass
+
+### ROUND 4: Community & Growth (07:00 - 09:00)
+[07:00] ns_11_social       - Check GitHub, reply comments
+[07:30] ns_12_research     - Learn new testing patterns
+[08:00] ns_13_blog         - Write daily summary
+[08:30] ns_14_report       - Generate daily statistics
+[09:00] ns_15_final_janitor - Final cleanup, reset for tomorrow
+
+---
+## STATE TRANSITIONS
+
+START → ISSUE1_CODED → ISSUE1_TESTED → PR1_SUBMITTED → READY_ROUND2 → ISSUE2_CODED → ISSUE2_TESTED → PR2_SUBMITTED → SHIFT_COMPLETE → START
+
+---
+## DAILY GOALS
+
+- Issues worked: 2
+- PRs submitted: 2
+- Code enhanced: Yes
+- Documentation: Added
+- Blog post: Written
+- Learning: Documented
+
+---
+[2026-03-29T01:45:00] System ready. First run at 02:00 AM tonight.
