@@ -87,3 +87,30 @@ All phases completed successfully.
 ## Iteration 1 - 2026-03-29T01:13:09.309984
 - Status: Polish complete
 
+---
+
+## Code Enhancement - 2026-03-29T05:00:00
+
+### ns_07_enhancer — Night Shift Round 2
+
+Full documentation and quality pass across all source files:
+
+**Docstrings**: Added/improved Google-style docstrings with Args/Returns for all
+public classes and methods across 8 files (core modules, main, scripts, tests).
+
+**Type Hints**: Added return types (`-> None`, `-> int`, `-> Dict[str, Any]`, etc.)
+and parameter types to 20+ functions/methods. Converted `List[X]` / `Dict[K, V]`
+to modern `list[X]` / `dict[K, V]` syntax where applicable.
+
+**Bug Fixes**:
+- Fixed 2 bare `except:` clauses (→ `except OSError:`, `except (FileNotFoundError, …):`)
+- Fixed missing `traceback` import in `main.py`
+- Fixed missing `json` import in `resilience.py` (was locally imported in one method)
+- Removed 3 unused variables (`response_status`, `details`, `l`)
+- Replaced unused `httpx` import with `importlib.util.find_spec` availability check
+
+**Linting**: `ruff check` → 0 errors. `ruff format` → all files formatted.
+
+**README**: Added architecture diagram, night shift schedule, Python/Ruff badges,
+expanded project structure docs.
+

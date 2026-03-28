@@ -1,11 +1,31 @@
-{
-  "status": "START",
-  "issue_id": null,
-  "issue_title": null,
-  "generated_code_path": null,
-  "test_result": null,
-  "pr_url": null,
-  "iteration": 0,
-  "last_run": null,
-  "errors": []
+﻿{
+    "round1_issue":  {
+                         "issue_id":  379,
+                         "test_result":  {
+                                             "tests_run":  3,
+                                             "pytest":  "PASSED",
+                                             "chaos_concurrent":  50,
+                                             "tests_passed":  3,
+                                             "chaos_passed":  50
+                                         },
+                         "issue_title":  "[Feature]: Add Electron support"
+                     },
+    "pr_url":  null,
+    "last_run":  "2026-03-29T06:00:00.000000",
+    "test_result":  {
+                        "tests_passed":  5,
+                        "chaos_concurrent":  50,
+                        "pytest":  "PASSED",
+                        "chaos_passed":  50,
+                        "chaos_time_s":  0.06,
+                        "tests_run":  5
+                    },
+    "issue_title":  "[Bug]: WebSocket reconnection fails after network switch",
+    "errors":  [
+
+               ],
+    "generated_code_path":  "D:\\mockclaw-immortal\\generated_mocks\\test_issue_382.py",
+    "issue_id":  382,
+    "status":  "ISSUE2_TESTED",
+    "iteration":  2
 }

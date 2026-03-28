@@ -1,21 +1,33 @@
 """
-MockClaw Gauntlet - Dummy Shop API
-Critical test: /checkout returns 400 for coupon "EXPIRED2026"
+MockClaw Gauntlet — Dummy Shop API
+====================================
+
+A minimal FastAPI e-commerce API used as the chaos-testing target.
+
+**Critical test case:** ``POST /checkout`` with coupon ``"EXPIRED2026"``
+MUST return HTTP 400.  The Gauntlet validates this invariant on every run.
+
+Run locally::
+
+    uvicorn tests.gauntlet.dummy_shop:app --port 9000
 """
+
+import random
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Optional
-import random
 
 app = FastAPI(title="Dummy Shop", version="1.0.0")
 
-# In-memory DB
-carts = {}
-orders = {}
+# In-memory mock databases
+carts: dict[str, list[dict]] = {}
+orders: dict[str, dict] = {}
 
 
 class CartItem(BaseModel):
+    """Schema for items added to a shopping cart."""
+
     product_id: str
     name: str
     price: float
@@ -23,6 +35,8 @@ class CartItem(BaseModel):
 
 
 class CheckoutRequest(BaseModel):
+    """Schema for the checkout endpoint."""
+
     user_id: str
     coupon_code: Optional[str] = None
 
@@ -64,7 +78,7 @@ async def checkout(request: CheckoutRequest):
     This is what the gauntlet validates.
     """
     EXPIRED_COUPONS = ["EXPIRED2026", "OLD_DEAL", "DEPRECATED"]
-    
+
     # THE TEST - Expired coupon check
     if request.coupon_code and request.coupon_code in EXPIRED_COUPONS:
         raise HTTPException(
@@ -72,21 +86,22 @@ async def checkout(request: CheckoutRequest):
             detail={
                 "error": "COUPON_EXPIRED",
                 "message": f"Coupon '{request.coupon_code}' has expired",
-                "valid_coupons": ["SAVE10", "SUMMER2026"]
-            }
+                "valid_coupons": ["SAVE10", "SUMMER2026"],
+            },
         )
-    
+
     # Valid checkout
     order_id = f"ORD-{random.randint(10000, 99999)}"
-    
+
     return {
         "order_id": order_id,
         "status": "confirmed",
         "total": random.uniform(100, 500),
-        "message": "Order placed successfully"
+        "message": "Order placed successfully",
     }
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=9000)
