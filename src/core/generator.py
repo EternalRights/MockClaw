@@ -49,13 +49,18 @@ class GenerationResult:
 class MockGenerator:
     """Generates FastAPI mock endpoints using LLM."""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o-mini"):
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
-        self.model = model
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+        self.api_key = api_key or os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+        self.provider = os.getenv("LLM_PROVIDER", "openai")
+        self.base_url = os.getenv("LLM_BASE_URL")
+        self.model = model or os.getenv("MODEL_NAME", "gpt-4o-mini")
         self.client = None
         
         if OPENAI_AVAILABLE and self.api_key:
-            self.client = OpenAI(api_key=self.api_key)
+            client_kwargs = {"api_key": self.api_key}
+            if self.base_url:
+                client_kwargs["base_url"] = self.base_url
+            self.client = OpenAI(**client_kwargs)
     
     def _build_prompt(self, endpoint_data: dict) -> str:
         """Build the LLM prompt from endpoint data."""
