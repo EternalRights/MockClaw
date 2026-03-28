@@ -5,6 +5,7 @@ import { Play, CheckCircle2, Loader2, Terminal, Zap } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useStore, type Endpoint } from '@/lib/store'
 import { Button } from '@/components/ui/button'
+import { generateMock, generateAll as apiGenerateAll } from '@/lib/api'
 
 export function MockFactory() {
   const { endpoints, updateEndpoint, logs, addLog, clearLogs } = useStore()
@@ -17,37 +18,48 @@ export function MockFactory() {
     }
   }, [logs])
 
-  const generateMock = async (endpoint: Endpoint) => {
+  const generateEndpoint = async (endpoint: Endpoint) => {
     updateEndpoint(endpoint.id, { generating: true })
     
-    // Simulate LLM thinking process
-    const thinkingSteps = [
-      { delay: 500, level: 'thinking' as const, msg: 'Analyzing HTTP request/response schema...' },
-      { delay: 1000, level: 'thinking' as const, msg: 'Extracting field types and validation rules...' },
-      { delay: 1500, level: 'thinking' as const, msg: 'Generating Pydantic models...' },
-      { delay: 2000, level: 'info' as const, msg: 'Configuring Faker providers for realistic data...' },
-      { delay: 2500, level: 'info' as const, msg: 'Writing FastAPI route handler...' },
-      { delay: 3000, level: 'success' as const, msg: `Generated mock for ${endpoint.method} ${endpoint.path}` },
-    ]
+    try {
+      const result = await generateMock(endpoint.id)
+      
+      // Add logs from API
+      result.logs.forEach((log: any) => {
+        addLog({ timestamp: log.timestamp, level: log.level, message: log.message })
+      })
 
-    for (const step of thinkingSteps) {
-      await new Promise(resolve => setTimeout(resolve, step.delay))
-      addLog({ timestamp: new Date().toLocaleTimeString(), level: step.level, message: step.msg })
+      updateEndpoint(endpoint.id, { generating: false, generated: result.success })
+    } catch (error) {
+      addLog({ 
+        timestamp: new Date().toLocaleTimeString(), 
+        level: 'error', 
+        message: `Failed to generate ${endpoint.path}: ${error}` 
+      })
+      updateEndpoint(endpoint.id, { generating: false })
     }
-
-    updateEndpoint(endpoint.id, { generating: false, generated: true })
   }
 
-  const generateAll = async () => {
+  const generateAllEndpoints = async () => {
     clearLogs()
-    addLog({ timestamp: new Date().toLocaleTimeString(), level: 'info', message: 'Starting batch generation for all endpoints...' })
+    addLog({ timestamp: new Date().toLocaleTimeString(), level: 'info', message: 'Starting batch generation...' })
     
-    for (const endpoint of endpoints.filter(e => !e.generated)) {
-      await generateMock(endpoint)
-      await new Promise(resolve => setTimeout(resolve, 500))
+    try {
+      const result = await apiGenerateAll()
+      addLog({ 
+        timestamp: new Date().toLocaleTimeString(), 
+        level: 'success', 
+        message: `Generated ${result.generated_count} endpoints!` 
+      })
+      
+      // Refresh endpoints from backend
+      const { getEndpoints } = await import('@/lib/api')
+      const endpointsData = await getEndpoints()
+      // Update store...
+      
+    } catch (error) {
+      addLog({ timestamp: new Date().toLocaleTimeString(), level: 'error', message: String(error) })
     }
-    
-    addLog({ timestamp: new Date().toLocaleTimeString(), level: 'success', message: 'Batch generation complete!' })
   }
 
   const getMethodColor = (method: string) => {
@@ -68,9 +80,13 @@ export function MockFactory() {
         <div className="p-4 border-b border-border flex items-center justify-between">
           <h3 className="font-semibold flex items-center gap-2">
             <Zap className="w-5 h-5 text-primary" />
-            Detected Endpoints
+            Detected Endpoints ({endpoints.length})
           </h3>
-          <Button size="sm" onClick={generateAll} disabled={endpoints.filter(e => !e.generated).length === 0}>
+          <Button 
+            size="sm" 
+            onClick={generateAllEndpoints} 
+            disabled={endpoints.filter(e => !e.generated).length === 0}
+          >
             Generate All
           </Button>
         </div>
@@ -99,7 +115,7 @@ export function MockFactory() {
                   ) : (
                     <Button
                       size="sm"
-                      onClick={() => generateMock(endpoint)}
+                      onClick={() => generateEndpoint(endpoint)}
                       disabled={endpoint.generating}
                     >
                       {endpoint.generating ? (

@@ -9,6 +9,11 @@ import time
 import json
 import subprocess
 from pathlib import Path
+
+# Fix Windows console encoding
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8')
+
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -176,10 +181,10 @@ def create_test_har_file(output_path: str = "test_data/sample_login.har"):
 def main():
     """Main CLI entry point."""
     print("""
-╔══════════════════════════════════════════════════════════════╗
-║                    MockClaw v0.1.0                          ║
-║          AI-Powered Mock API Generator from Traffic          ║
-╚══════════════════════════════════════════════════════════════╝
++==============================================================+
+|                    MockClaw v0.1.0                          |
+|          AI-Powered Mock API Generator from Traffic          |
++==============================================================+
     """)
     
     # Setup directories

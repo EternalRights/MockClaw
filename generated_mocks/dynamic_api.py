@@ -66,7 +66,7 @@ async def mock_post_endpoint():
     
     # Generate mock response data
     mock_data = {
-    "token": "mock_jwt_token",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
     "user": {
         "id": 1,
         "username": "testuser",
@@ -115,8 +115,13 @@ async def mock_get_endpoint():
     
     # Generate mock response data
     mock_data = {
-    "error": "Database connection failed",
-    "code": "ERR_DB_CONNECTION"
+    "id": 123,
+    "name": "John Doe",
+    "email": "john@example.com",
+    "profile": {
+        "bio": "Software Engineer",
+        "avatar": "https://example.com/avatar.jpg"
+    }
 }
     
     return MockResponse(data=mock_data)
