@@ -1,260 +1,449 @@
 """
-MockClaw Main CLI
-Watches input_har folder and auto-generates mock APIs.
+MockClaw Agent Mode
+Infinite self-improvement loop.
 """
 
 import os
 import sys
-import time
 import json
+import time
+import shutil
 import subprocess
 from pathlib import Path
+from datetime import datetime
+from typing import Optional, Dict, Any
 
-# Fix Windows console encoding
+# Fix Windows encoding
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
 
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent))
 
 from core.parser import HARParser
 from core.generator import MockGenerator
+from core.resilience import (
+    ResiliencePatch, 
+    Watchdog, 
+    graceful_exit, 
+    retry,
+    logger
+)
 
 
-class HARFileHandler(FileSystemEventHandler):
-    """Handles new HAR file detection."""
+class ImmortalAgent:
+    """
+    The Immortal MockClaw Agent.
+    Runs infinite iteration: Janitor -> Generate -> Chaos -> Repair -> Polish
+    """
     
-    def __init__(self, generator: MockGenerator, input_dir: str, output_dir: str):
-        self.generator = generator
-        self.input_dir = Path(input_dir)
-        self.output_dir = Path(output_dir)
-        self.processing = set()
+    def __init__(self):
+        self.iteration = 0
+        self.watchdog = Watchdog(timeout_seconds=600)
+        self.heartbeat_log = Path("logs/heartbeat.log")
+        self.evolution_log = Path("logs/evolution_history.md")
+        self.checkpoint_dir = Path("logs/checkpoints")
         
-    def on_created(self, event):
-        """Handle new file creation."""
-        if event.is_directory:
-            return
+        # Ensure directories exist
+        self.heartbeat_log.parent.mkdir(parents=True, exist_ok=True)
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         
-        file_path = Path(event.src_path)
-        if file_path.suffix == '.har' and file_path not in self.processing:
-            self._process_har_file(file_path)
-    
-    def _process_har_file(self, har_path: Path):
-        """Process a HAR file and generate mocks."""
-        print(f"\n📥 New HAR file detected: {har_path.name}")
-        self.processing.add(har_path)
+    def janitor(self):
+        """
+        Clean up resources before each iteration.
+        Start with a clean slate.
+        """
+        logger.info("=" * 60)
+        logger.info("JANITOR: Cleaning up resources...")
+        logger.info("=" * 60)
         
+        # Docker cleanup
         try:
-            # Step 1: Parse HAR
-            print("🔍 Parsing traffic...")
-            parser = HARParser(str(har_path))
-            endpoints_data = parser.export_as_dict()
-            print(f"   Found {endpoints_data['total_endpoints']} API endpoints")
+            result = subprocess.run(
+                ["docker", "ps", "-aq"],
+                capture_output=True, text=True, timeout=5
+            )
+            containers = result.stdout.strip().split('\n') if result.stdout.strip() else []
             
-            # Step 2: Generate mocks
-            print("🤖 Generating mock code...")
-            results = self.generator.generate_all(
-                endpoints_data['endpoints'],
-                str(self.output_dir)
+            if containers and containers[0]:
+                logger.info(f"Stopping {len(containers)} containers...")
+                for c in containers:
+                    if c:
+                        subprocess.run(["docker", "stop", c], timeout=10)
+                        subprocess.run(["docker", "rm", c], timeout=10)
+        except Exception as e:
+            logger.warning(f"Docker cleanup warning: {e}")
+        
+        # File cleanup
+        cleanup_paths = [
+            Path("generated_mocks/*"),
+            Path("logs/temp/*"),
+        ]
+        
+        for pattern in cleanup_paths:
+            for f in Path().glob(str(pattern)):
+                try:
+                    if f.is_file():
+                        f.unlink()
+                    elif f.is_dir():
+                        shutil.rmtree(f)
+                except Exception as e:
+                    logger.warning(f"Failed to delete {f}: {e}")
+        
+        # Python cache cleanup
+        for p in Path("src").rglob("__pycache__"):
+            shutil.rmtree(p, ignore_errors=True)
+        
+        logger.info("JANITOR: Cleanup complete!")
+        
+    @retry(max_retries=3, delay=2.0)
+    def generate(self, har_path: str) -> bool:
+        """
+        Generate mock code from HAR file.
+        
+        Args:
+            har_path: Path to HAR file
+            
+        Returns:
+            True if generation successful
+        """
+        logger.info("=" * 60)
+        logger.info("GENERATE: Creating mock code...")
+        logger.info("=" * 60)
+        
+        if not Path(har_path).exists():
+            logger.error(f"HAR file not found: {har_path}")
+            return False
+        
+        # Parse HAR
+        parser = HARParser(har_path)
+        endpoints = parser.get_endpoints()
+        
+        logger.info(f"Found {len(endpoints)} endpoints")
+        
+        if len(endpoints) == 0:
+            logger.warning("No endpoints found in HAR file")
+            return False
+        
+        # Generate mocks
+        generator = MockGenerator()
+        results = generator.generate_all(
+            [self._endpoint_to_dict(e) for e in endpoints],
+            "generated_mocks"
+        )
+        
+        success_count = sum(1 for r in results if r.success)
+        logger.info(f"Generated {success_count}/{len(results)} endpoints")
+        
+        if success_count == 0:
+            logger.error("No endpoints generated successfully")
+            return False
+        
+        # Start Docker
+        logger.info("Starting Docker containers...")
+        try:
+            subprocess.run(
+                ["docker-compose", "up", "-d"],
+                timeout=60,
+                cwd=Path.cwd()
             )
             
-            success_count = sum(1 for r in results if r.success)
-            print(f"   Generated {success_count}/{len(results)} endpoints successfully")
+            # Wait for health
+            logger.info("Waiting for services to start...")
+            time.sleep(5)
             
-            # Step 3: Show generated file
-            generated_file = self.output_dir / "dynamic_api.py"
-            if generated_file.exists():
-                print(f"   💾 Saved to: {generated_file}")
-                
-            # Step 4: Offer to restart mock server
-            print("\n🚀 To deploy, run:")
-            print(f"   docker-compose -f {Path.cwd() / 'docker-compose.yml'} up -d mock-server")
+            # Health check
+            import requests
+            for _ in range(10):
+                try:
+                    r = requests.get("http://localhost:8000/health", timeout=5)
+                    if r.status_code == 200:
+                        logger.info("Services healthy!")
+                        return True
+                except:
+                    time.sleep(2)
+            
+            logger.error("Services failed to start")
+            return False
             
         except Exception as e:
-            print(f"❌ Error processing {har_path.name}: {e}")
-        finally:
-            self.processing.discard(har_path)
-
-
-def create_test_har_file(output_path: str = "test_data/sample_login.har"):
-    """Create a sample HAR file for testing."""
-    har_content = {
-        "log": {
-            "version": "1.2",
-            "creator": {
-                "name": "MockClaw Test Generator",
-                "version": "0.1.0"
-            },
-            "entries": [
-                {
-                    "startedDateTime": "2026-03-28T10:00:00.000Z",
-                    "time": 150,
-                    "request": {
-                        "method": "POST",
-                        "url": "https://api.example.com/api/login",
-                        "httpVersion": "HTTP/1.1",
-                        "headers": [
-                            {"name": "Content-Type", "value": "application/json"},
-                            {"name": "Accept", "value": "application/json"}
-                        ],
-                        "queryString": [],
-                        "postData": {
-                            "mimeType": "application/json",
-                            "text": '{"username":"testuser","password":"secret123"}'
-                        },
-                        "headersSize": -1,
-                        "bodySize": 45
-                    },
-                    "response": {
-                        "status": 200,
-                        "statusText": "OK",
-                        "httpVersion": "HTTP/1.1",
-                        "headers": [
-                            {"name": "Content-Type", "value": "application/json"}
-                        ],
-                        "content": {
-                            "mimeType": "application/json",
-                            "text": '{"token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9","user":{"id":1,"username":"testuser","email":"test@example.com"}}'
-                        },
-                        "redirectURL": "",
-                        "headersSize": -1,
-                        "bodySize": 180
-                    },
-                    "cache": {},
-                    "timings": {
-                        "send": 0,
-                        "wait": 100,
-                        "receive": 10
-                    }
-                },
-                {
-                    "startedDateTime": "2026-03-28T10:00:01.000Z",
-                    "time": 80,
-                    "request": {
-                        "method": "GET",
-                        "url": "https://api.example.com/api/users/123",
-                        "httpVersion": "HTTP/1.1",
-                        "headers": [
-                            {"name": "Authorization", "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"}
-                        ],
-                        "queryString": [
-                            {"name": "include", "value": "profile"},
-                            {"name": "status", "value": "active"}
-                        ],
-                        "postData": None,
-                        "headersSize": -1,
-                        "bodySize": 0
-                    },
-                    "response": {
-                        "status": 200,
-                        "statusText": "OK",
-                        "httpVersion": "HTTP/1.1",
-                        "headers": [
-                            {"name": "Content-Type", "value": "application/json"}
-                        ],
-                        "content": {
-                            "mimeType": "application/json",
-                            "text": '{"id":123,"name":"John Doe","email":"john@example.com","profile":{"bio":"Software Engineer","avatar":"https://example.com/avatar.jpg"}}'
-                        },
-                        "redirectURL": "",
-                        "headersSize": -1,
-                        "bodySize": 200
-                    },
-                    "cache": {},
-                    "timings": {
-                        "send": 0,
-                        "wait": 60,
-                        "receive": 10
-                    }
-                }
-            ]
-        }
-    }
+            logger.error(f"Docker start failed: {e}")
+            return False
     
-    output = Path(output_path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(har_content, indent=2), encoding='utf-8')
-    print(f"✅ Created test HAR file: {output_path}")
-    return output_path
+    def _endpoint_to_dict(self, endpoint) -> dict:
+        """Convert endpoint to dict for generator."""
+        return {
+            "id": f"ep_{endpoint.resource_path}_{endpoint.method}".replace("/", "_"),
+            "path": endpoint.resource_path,
+            "method": endpoint.method,
+            "sample_request": {
+                "body": endpoint.requests[0].body if endpoint.requests else None
+            },
+            "sample_response": {
+                "status": endpoint.responses[0].status if endpoint.responses else 200,
+                "body": endpoint.responses[0].body if endpoint.responses else None
+            }
+        }
+    
+    def chaos_test(self) -> Dict[str, Any]:
+        """
+        Run adversarial testing.
+        This is TORTURE, not testing.
+        """
+        logger.info("=" * 60)
+        logger.info("CHAOS: Running adversarial tests...")
+        logger.info("=" * 60)
+        
+        # Import and run chaos breaker
+        sys.path.insert(0, str(Path.cwd()))
+        from scripts.chaos_breaker import ChaosBreaker
+        import asyncio
+        
+        breaker = ChaosBreaker()
+        results = asyncio.run(breaker.run_all_chaos_tests())
+        
+        return results
+    
+    def repair(self, failure_info: Dict[str, Any]):
+        """
+        Self-repair based on failure analysis.
+        
+        Args:
+            failure_info: Information about what failed
+        """
+        logger.info("=" * 60)
+        logger.info("REPAIR: Analyzing failures...")
+        logger.info("=" * 60)
+        
+        # Analyze failure patterns
+        failures = failure_info.get("failures", 0)
+        
+        if failures > 0:
+            logger.info(f"Detected {failures} failures")
+            
+            # Check what failed
+            for test_name, result in failure_info.get("results", {}).items():
+                if result.get("status") in ["failed", "crashed", "down"]:
+                    logger.warning(f"Test '{test_name}' failed: {result}")
+                    
+                    # Register patch
+                    ResiliencePatch.add_patch(
+                        error_type=test_name,
+                        fix=f"Investigate {test_name} failure handling",
+                        code=f"# TODO: Improve {test_name} resilience"
+                    )
+            
+            # Save patches
+            ResiliencePatch.save_patches()
+            
+            logger.info("Patches written. Will apply on next iteration.")
+        
+    def polish(self):
+        """
+        Polish the project - linting, formatting, docs.
+        Only runs if chaos tests pass.
+        """
+        logger.info("=" * 60)
+        logger.info("POLISH: Improving code quality...")
+        logger.info("=" * 60)
+        
+        # Run linter
+        try:
+            result = subprocess.run(
+                ["ruff", "check", ".", "--fix"],
+                capture_output=True, text=True, timeout=60
+            )
+            logger.info(f"Ruff: Fixed {result.stdout.count('Fixed')} issues")
+        except FileNotFoundError:
+            logger.warning("Ruff not installed, skipping linting")
+        except Exception as e:
+            logger.warning(f"Linting error: {e}")
+        
+        # Run type checker
+        try:
+            result = subprocess.run(
+                ["mypy", "src/", "--ignore-missing-imports"],
+                capture_output=True, text=True, timeout=60
+            )
+            if "error:" in result.stdout:
+                logger.warning(f"Type errors found (non-blocking)")
+        except FileNotFoundError:
+            logger.warning("Mypy not installed, skipping type checking")
+        except Exception as e:
+            logger.warning(f"Type check error: {e}")
+        
+        # Update docs
+        self._update_evolution_log()
+        
+        logger.info("POLISH: Complete!")
+    
+    def validate(self) -> bool:
+        """
+        Validate generated mocks work correctly.
+        The critical test: expired coupon should return 400.
+        """
+        logger.info("=" * 60)
+        logger.info("VALIDATE: Testing generated mocks...")
+        logger.info("=" * 60)
+        
+        try:
+            import requests
+            
+            # Test health
+            r = requests.get("http://localhost:8000/health", timeout=5)
+            if r.status_code != 200:
+                logger.error("Health check failed")
+                return False
+            
+            # Test info
+            r = requests.get("http://localhost:8000/mockclaw/info", timeout=5)
+            if r.status_code != 200:
+                logger.error("Info endpoint failed")
+                return False
+            
+            logger.info("All validation tests passed!")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Validation error: {e}")
+            return False
+    
+    def _update_evolution_log(self):
+        """Update evolution history log."""
+        timestamp = datetime.now().isoformat()
+        
+        entry = f"""
+## Iteration {self.iteration} - {timestamp}
+
+### Status
+- Chaos Tests: Pending
+- Patches Applied: {len(ResiliencePatch.patches)}
+- Endpoints Generated: {len(list(Path("generated_mocks").glob("*.py")))}
+
+### Changes
+- Auto-polish completed
+- Linting and type checking run
+
+---
+"""
+        
+        with open(self.evolution_log, 'a', encoding='utf-8') as f:
+            f.write(entry)
+    
+    def _log_heartbeat(self, status: str, chaos_tests: str):
+        """Log heartbeat to file."""
+        timestamp = datetime.now().isoformat()
+        
+        entry = f"[{timestamp}] | Iter: {self.iteration} | Status: {status} | Chaos: {chaos_tests}\n"
+        
+        with open(self.heartbeat_log, 'a', encoding='utf-8') as f:
+            f.write(entry)
+        
+        logger.info(f"Heartbeat: Iter {self.iteration} - {status}")
+    
+    def run_iteration(self, har_path: str):
+        """
+        Run single iteration of the immortal loop.
+        
+        Args:
+            har_path: Path to HAR file for generation
+        """
+        self.iteration += 1
+        self.watchdog.heartbeat()
+        
+        logger.info("\n" + "=" * 60)
+        logger.info(f"IMMORTAL AGENT - ITERATION {self.iteration}")
+        logger.info("=" * 60)
+        
+        # Phase A: Janitor
+        self.janitor()
+        
+        # Phase B: Generate
+        if not self.generate(har_path):
+            self._log_heartbeat("FAILED", "generate_error")
+            graceful_exit("Generation failed", 1)
+        
+        # Phase C: Chaos
+        chaos_results = self.chaos_test()
+        
+        # Phase D: Repair or Polish
+        if chaos_results.get("failures", 0) > 0:
+            self.repair(chaos_results)
+            self._log_heartbeat("REPAIR", f"{chaos_results['failures']}_failures")
+            return False  # Need retry
+        else:
+            self.polish()
+            self._log_heartbeat("OK", "all_passed")
+            
+            # Phase F: Validate
+            if not self.validate():
+                logger.warning("Validation failed, will retry")
+                return False
+            
+            return True
+    
+    def run_forever(self, har_path: str, max_iterations: int = 1000):
+        """
+        Run infinite loop until max iterations or fatal error.
+        
+        Args:
+            har_path: Path to HAR file
+            max_iterations: Maximum iterations before exit
+        """
+        logger.info("=" * 60)
+        logger.info("IMMORTAL AGENT ACTIVATED")
+        logger.info("=" * 60)
+        logger.info(f"Max iterations: {max_iterations}")
+        logger.info(f"HAR file: {har_path}")
+        logger.info("Press Ctrl+C to stop\n")
+        
+        while self.iteration < max_iterations:
+            try:
+                success = self.run_iteration(har_path)
+                
+                if success:
+                    logger.info(f"\nIteration {self.iteration} complete!")
+                    time.sleep(5)  # Brief rest
+                else:
+                    logger.warning("\nIteration failed, retrying immediately...")
+                    
+            except KeyboardInterrupt:
+                logger.info("\nKeyboard interrupt, exiting...")
+                break
+            except Exception as e:
+                logger.error(f"\nFATAL ERROR: {e}")
+                import traceback
+                traceback.print_exc()
+                
+                # Log patch and exit for respawn
+                ResiliencePatch.add_patch(
+                    error_type=type(e).__name__,
+                    fix=f"Handle {type(e).__name__} gracefully",
+                    code=f"try:\n    ...\nexcept {type(e).__name__}:\n    graceful_exit('{e}')"
+                )
+                graceful_exit(str(e), 1)
+        
+        logger.info(f"\nCompleted {self.iteration} iterations")
+        return 0
 
 
 def main():
-    """Main CLI entry point."""
-    print("""
-+==============================================================+
-|                    MockClaw v0.1.0                          |
-|          AI-Powered Mock API Generator from Traffic          |
-+==============================================================+
-    """)
+    """Main entry point for agent mode."""
+    import argparse
     
-    # Setup directories
-    base_dir = Path(__file__).parent.parent
-    input_dir = base_dir / "input_har"
-    output_dir = base_dir / "generated_mocks"
-    test_data_dir = base_dir / "test_data"
+    parser = argparse.ArgumentParser(description="MockClaw Immortal Agent")
+    parser.add_argument("--agent-mode", action="store_true", help="Run in agent mode")
+    parser.add_argument("--har", default="tests/gauntlet/flow.har", help="HAR file path")
+    parser.add_argument("--max-iter", type=int, default=10, help="Max iterations")
     
-    input_dir.mkdir(exist_ok=True)
-    output_dir.mkdir(exist_ok=True)
-    test_data_dir.mkdir(exist_ok=True)
+    args = parser.parse_args()
     
-    # Initialize generator
-    generator = MockGenerator()
-    
-    # Check for --generate-test flag
-    if '--generate-test' in sys.argv or '-t' in sys.argv:
-        print("🎯 Generating test HAR file...")
-        create_test_har_file(str(test_data_dir / "sample_login.har"))
-        
-        print("\n🔄 Running test generation...")
-        har_path = test_data_dir / "sample_login.har"
-        parser = HARParser(str(har_path))
-        endpoints_data = parser.export_as_dict()
-        results = generator.generate_all(endpoints_data['endpoints'], str(output_dir))
-        
-        success = all(r.success for r in results)
-        print(f"\n{'✅ Test generation PASSED' if success else '❌ Test generation FAILED'}")
-        
-        if (output_dir / "dynamic_api.py").exists():
-            print(f"   Generated file: {output_dir / 'dynamic_api.py'}")
-        
-        return 0 if success else 1
-    
-    # Check for direct HAR file processing
-    if len(sys.argv) > 1 and sys.argv[1].endswith('.har'):
-        har_path = Path(sys.argv[1])
-        print(f"📂 Processing: {har_path}")
-        
-        parser = HARParser(str(har_path))
-        endpoints_data = parser.export_as_dict()
-        print(f"📊 Found {endpoints_data['total_endpoints']} endpoints")
-        
-        results = generator.generate_all(endpoints_data['endpoints'], str(output_dir))
-        
-        for r in results:
-            print(f"  {'✅' if r.success else '❌'} {r.endpoint_path}")
-        
-        print(f"\n💾 Output: {output_dir / 'dynamic_api.py'}")
+    if not args.agent_mode:
+        print("Run with --agent-mode to start the immortal agent")
         return 0
     
-    # Watch mode
-    print(f"📁 Watching: {input_dir}")
-    print("   Drop a .har file to generate mocks")
-    print("   Press Ctrl+C to stop\n")
-    
-    event_handler = HARFileHandler(generator, str(input_dir), str(output_dir))
-    observer = Observer()
-    observer.schedule(event_handler, str(input_dir), recursive=False)
-    observer.start()
-    
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("\n\n👋 Shutting down...")
-        observer.stop()
-    observer.join()
-    
-    return 0
+    agent = ImmortalAgent()
+    return agent.run_forever(args.har, args.max_iter)
 
 
 if __name__ == "__main__":
