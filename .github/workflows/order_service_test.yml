@@ -1,0 +1,63 @@
+name: Order Service Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r src/requirements.txt
+        pip install pytest pytest-asyncio httpx
+    
+    - name: Verify HAR file
+      run: |
+        if [ ! -f "tests/gauntlet/flow.har" ]; then
+          echo "❌ HAR file not found!"
+          exit 1
+        fi
+        echo "✅ HAR file found: tests/gauntlet/flow.har"
+    
+    - name: Generate mocks
+      run: |
+        echo "Generating mocks from HAR file..."
+        python test_order_service/generate_mocks.py
+        
+        if [ ! -f "test_order_service/mocks/dynamic_api.py" ]; then
+          echo "❌ Mock generation failed!"
+          exit 1
+        fi
+        echo "✅ Mocks generated successfully"
+    
+    - name: Run pytest suite
+      run: |
+        echo "Running order service tests..."
+        python -m pytest test_order_service/test_order_scenarios.py -v --asyncio-mode=auto
+        
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results
+        path: |
+          test_order_service/.pytest_cache/
+          logs/

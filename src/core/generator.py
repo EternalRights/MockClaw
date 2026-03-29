@@ -5,21 +5,24 @@ Uses LLM to generate FastAPI mock endpoints from parsed HAR data.
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+# Use orjson for 2-5x faster JSON serialization if available
+try:
+    import orjson
+    HAS_ORJSON = True
+except ImportError:
+    import json
+    orjson = None
+    HAS_ORJSON = False
+
 if TYPE_CHECKING:
     from openai import OpenAI
 
-try:
-    from openai import OpenAI
-
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
+OPENAI_AVAILABLE = False  # Will be set to True when openai is successfully imported lazily
 
 
 SYSTEM_PROMPT = """You are an expert API architect. Given this HTTP request/response pair, generate a Python FastAPI endpoint.
@@ -76,6 +79,8 @@ def _body_literal(body_text: str) -> str:
     """Compact JSON string literal from raw HAR body text."""
     try:
         parsed = json.loads(body_text)
+        if HAS_ORJSON:
+            return orjson.dumps(parsed).decode('utf-8')
         return json.dumps(parsed, ensure_ascii=False)
     except Exception:
         return '"mock"'
@@ -129,6 +134,47 @@ def _route_from_responses(
 # ---------------------------------------------------------------------------
 
 
+def _get_openai_client(api_key: str | None = None, base_url: str | None = None) -> Any:
+    """
+    Lazy load OpenAI client only when needed.
+    
+    This avoids the 800ms+ import cost when LLM is not configured.
+    
+    Args:
+        api_key: Optional API key
+        base_url: Optional base URL for API endpoint
+        
+    Returns:
+        OpenAI client instance or None if not available/configured
+    """
+    global OPENAI_AVAILABLE
+    
+    if not hasattr(_get_openai_client, "_client_cache"):
+        _get_openai_client._client_cache = None
+        
+        # Lazily import openai to avoid import cost when not configured
+        try:
+            import openai
+            OPENAI_AVAILABLE = True
+        except ImportError:
+            OPENAI_AVAILABLE = False
+            return None
+        
+        if OPENAI_AVAILABLE:
+            api_key = api_key or os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+            if api_key:
+                try:
+                    from openai import OpenAI
+                    kwargs: dict[str, Any] = {"api_key": api_key}
+                    if base_url := base_url or os.getenv("LLM_BASE_URL"):
+                        kwargs["base_url"] = base_url
+                    _get_openai_client._client_cache = OpenAI(**kwargs)
+                except Exception:
+                    _get_openai_client._client_cache = None
+    
+    return _get_openai_client._client_cache
+
+
 class MockGenerator:
     """Generates FastAPI mock endpoints from HAR endpoint data.
 
@@ -154,16 +200,11 @@ class MockGenerator:
             "OPENAI_API_KEY"
         )
         self.model = model or os.getenv("MODEL_NAME", "gpt-4o-mini")
+        self._base_url = os.getenv("LLM_BASE_URL")
         self.client: Any = None
 
         if OPENAI_AVAILABLE and self.api_key:
-            try:
-                kwargs: dict[str, Any] = {"api_key": self.api_key}
-                if base_url := os.getenv("LLM_BASE_URL"):
-                    kwargs["base_url"] = base_url
-                self.client = OpenAI(**kwargs)
-            except Exception:  # pragma: no cover
-                self.client = None
+            self.client = _get_openai_client(self.api_key, self._base_url)
 
     # ------------------------------------------------------------------
     # LLM path
@@ -277,10 +318,54 @@ class MockGenerator:
             "# MockClaw Auto-Generated Mock Server",
             "# Do not edit manually -- regenerate from HAR traffic.",
             "",
-            "from fastapi import FastAPI, HTTPException, status",
+            "from fastapi import FastAPI, HTTPException, status, Request, Response",
+            "from fastapi.responses import JSONResponse",
             "from typing import Any",
+            "from starlette.middleware.base import BaseHTTPMiddleware",
+            "import re",
+            "import time",
+            "from collections import defaultdict",
             "",
             "app = FastAPI(title='MockClaw Generated API')",
+            "",
+            "# === Resilience Middleware (Auto-Injected) ===",
+            "",
+            "class PathTraversalMiddleware(BaseHTTPMiddleware):",
+            "    async def dispatch(self, request: Request, call_next):",
+            "        path = request.url.path",
+            "        dangerous = [r'\\.\\.', '%2e%2e', '%252e', '%2f%5c.\\.', '//']",
+            "        for pattern in dangerous:",
+            "            if re.search(pattern, path, re.IGNORECASE):",
+            "                return JSONResponse(status_code=400, content={'error': 'Invalid path', 'code': 'PATH_TRAVERSAL_BLOCKED'})",
+            "        return await call_next(request)",
+            "",
+            "class RateLimitMiddleware(BaseHTTPMiddleware):",
+            "    def __init__(self, app, requests_per_minute: int = 60):",
+            "        super().__init__(app)",
+            "        self.requests_per_minute = requests_per_minute",
+            "        self.request_counts = defaultdict(list)",
+            "    async def dispatch(self, request: Request, call_next):",
+            "        client_ip = request.client.host if request.client else 'unknown'",
+            "        current_time = time.time()",
+            "        self.request_counts[client_ip] = [t for t in self.request_counts[client_ip] if current_time - t < 60]",
+            "        if len(self.request_counts[client_ip]) >= self.requests_per_minute:",
+            "            return JSONResponse(status_code=429, content={'error': 'Too many requests', 'code': 'RATE_LIMIT_EXCEEDED'})",
+            "        self.request_counts[client_ip].append(current_time)",
+            "        return await call_next(request)",
+            "",
+            "class GlobalErrorHandler(BaseHTTPMiddleware):",
+            "    async def dispatch(self, request: Request, call_next):",
+            "        try:",
+            "            return await call_next(request)",
+            "        except HTTPException as e:",
+            "            return JSONResponse(status_code=e.status_code, content={'error': str(e.detail), 'code': 'HTTP_ERROR'})",
+            "        except Exception as e:",
+            "            return JSONResponse(status_code=500, content={'error': 'Internal server error', 'code': 'INTERNAL_ERROR'})",
+            "",
+            "# Apply middleware",
+            "app.add_middleware(GlobalErrorHandler)",
+            "app.add_middleware(RateLimitMiddleware, requests_per_minute=60)",
+            "app.add_middleware(PathTraversalMiddleware)",
             "",
             '@app.get("/health")',
             "async def health():",

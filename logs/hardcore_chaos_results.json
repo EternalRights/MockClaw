@@ -1,0 +1,27 @@
+{
+  "total_tests": 5,
+  "failures": 1,
+  "results": {
+    "concurrent": {
+      "status": "passed",
+      "success": 50,
+      "time": 0.14343905448913574
+    },
+    "dos": {
+      "status": "passed",
+      "rate_limited": 190,
+      "errors": 0
+    },
+    "path_traversal": {
+      "status": "failed",
+      "blocked": 2
+    },
+    "garbage": {
+      "status": "passed",
+      "handled": 8
+    },
+    "docker_kill": {
+      "status": "skipped"
+    }
+  }
+}

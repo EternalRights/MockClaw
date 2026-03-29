@@ -3,8 +3,9 @@
 [![Python](https://img.shields.io/badge/Python-3.11-blue.svg)](https://python.org)
 [![Docker](https://img.shields.io/badge/Docker-Ready-1d63ed.svg)](https://docker.com)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Chaos Tests](https://img.shields.io/badge/Chaos-Engineered-red.svg)](scripts/enhanced_chaos_test.py)
 
-AI-powered HTTP traffic recorder and mock server generator.
+AI-powered HTTP traffic recorder and mock server generator with chaos engineering.
 
 ## Features
 
@@ -13,6 +14,9 @@ AI-powered HTTP traffic recorder and mock server generator.
 - Dockerized mock server deployment
 - Interactive API documentation with OpenAPI
 - Real-time traffic analysis dashboard
+- **Gauntlet Traffic Recorder** - Record realistic user sessions
+- **Chaos Engineering** - Built-in adversarial testing (path traversal, rate limiting, garbage data)
+- **Auto-Injected Resilience** - Security middleware in all generated mocks
 
 ## Quick Start
 
@@ -67,6 +71,33 @@ start.bat
 ```
 
 Access the dashboard at http://localhost:3000
+
+### Gauntlet Workflow (Recommended)
+
+The Gauntlet workflow records realistic user traffic and generates hardened mocks:
+
+```bash
+# Step 1: Start the Dummy Shop API
+python tests/gauntlet/dummy_shop.py
+
+# Step 2: Record user session (creates flow.har)
+python scripts/gauntlet_recorder.py
+
+# Step 3: Generate mocks from recorded traffic
+python regenerate_mocks.py
+
+# Step 4: Run chaos tests to verify resilience
+python scripts/enhanced_chaos_test.py
+
+# Step 5: Run generated mock server
+cd generated_mocks && uvicorn dynamic_api:app --host 0.0.0.0 --port 8000
+```
+
+This workflow:
+1. Records a complete user shopping session (10 steps)
+2. Captures both success and error scenarios (expired coupons, etc.)
+3. Generates mocks with auto-injected security middleware
+4. Validates resilience against adversarial attacks
 
 ## Architecture
 
@@ -157,8 +188,30 @@ MockClaw/
 ### Running Tests
 
 ```bash
+# Run unit tests
 pytest tests/
+
+# Run chaos tests (adversarial testing)
+python scripts/enhanced_chaos_test.py
+
+# Run full CI pipeline
+scripts/ci_immortal.bat
 ```
+
+### Chaos Testing
+
+MockClaw includes built-in chaos engineering to test resilience:
+
+**Test Suite:**
+- **Concurrency Test**: 50 parallel requests
+- **Garbage Data Test**: Null values, XSS attempts, SQL injection
+- **Path Traversal Test**: `../`, `%2e%2e`, and other bypass attempts
+- **Rate Limiting Test**: 100 rapid requests to trigger DoS protection
+
+**Auto-Injected Middleware:**
+- `PathTraversalMiddleware` - Blocks directory traversal attacks
+- `RateLimitMiddleware` - 60 requests/minute per IP
+- `GlobalErrorHandler` - Safe error responses, no stack traces
 
 ### Code Style
 

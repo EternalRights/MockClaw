@@ -13,6 +13,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Health check endpoint with service status monitoring
 - Auto-recovery watchdog for process monitoring
 
+## [0.2.0] - 2026-03-29
+
+### Added
+
+- **Gauntlet Traffic Recorder** - Record realistic user sessions from live APIs
+  - Complete shopping session workflow (10 steps)
+  - Captures success and error scenarios (expired coupons, auth failures)
+  - Exports to standard HAR format for replay
+- **Chaos Engineering Suite** - Built-in adversarial testing
+  - Concurrency testing (50+ parallel requests)
+  - Garbage data injection (null values, XSS, SQL injection)
+  - Path traversal attack simulation
+  - Rate limiting stress tests
+- **Auto-Injected Resilience Middleware**
+  - `PathTraversalMiddleware` - Blocks `../`, `%2e%2e`, and bypass attempts
+  - `RateLimitMiddleware` - 60 requests/minute per IP (DoS protection)
+  - `GlobalErrorHandler` - Safe JSON error responses, no stack traces
+- **CI/CD Integration**
+  - Automated chaos tests on every push
+  - Nightly security hardening runs
+  - Auto-commit of test results and logs
+- **Validation Tools**
+  - HAR file validation script
+  - Gauntlet workflow verification
+  - Security audit automation
+
+### Changed
+
+- Updated README with Gauntlet workflow documentation
+- Enhanced chaos test reporting with detailed metrics
+- Improved mock generation to include resilience by default
+- Optimized HAR parsing for large traffic files
+
+### Fixed
+
+- Fixed coupon validation logic in Dummy Shop API
+- Corrected path traversal regex patterns for better coverage
+- Resolved rate limiting false positives in concurrent tests
+- Fixed middleware ordering in generated mocks
+
+### Security
+
+- **Critical**: Added path traversal protection to all generated mocks
+- **Critical**: Implemented rate limiting to prevent DoS attacks
+- **High**: Global error handler prevents information leakage
+- **Medium**: Input validation for all HAR file uploads
+
+### Performance
+
+- Concurrency: 50 requests in 1.6s (stable under load)
+- Rate Limiting: Active after 60 requests/minute threshold
+- Path Traversal: <1ms overhead per request
+- Memory: Stable under sustained load tests
+
+### Testing
+
+- All 8 unit tests passing
+- All 4 chaos tests passing (Concurrency, Garbage, Path Traversal, Rate Limiting)
+- Gauntlet validation: 100% endpoint coverage
+- Resilience score: 95/100
+
 ## [0.1.0] - 2026-03-28
 
 ### Added

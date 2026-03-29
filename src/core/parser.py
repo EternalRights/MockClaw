@@ -3,11 +3,13 @@ MockClaw Traffic Parser
 Parses HAR files and extracts API endpoints for mock generation.
 """
 
-import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+# JSON import - keep stdlib for file I/O (orjson doesn't support file objects)
+import json
 
 
 # Static asset MIME types to filter out
@@ -20,6 +22,11 @@ STATIC_MIME_TYPES = {
 # URL patterns to filter
 STATIC_URL_PATTERNS = ['.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.svg', 
                        '.ico', '.woff', '.woff2', '.ttf', '.eot', '.webp']
+
+# Pre-compiled regex patterns for URL path extraction (performance optimization)
+UUID_PATTERN = re.compile(r'/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.IGNORECASE)
+ID_PATTERN = re.compile(r'/[0-9]+')
+BASE_PATH_PATTERN = re.compile(r'/\{[^}]+\}$')
 
 
 @dataclass
@@ -104,9 +111,9 @@ class HARParser:
         parsed = urlparse(clean_url)
         path = parsed.path
         
-        # Handle common ID patterns
-        path = re.sub(r'/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '/{uuid}', path, flags=re.IGNORECASE)
-        path = re.sub(r'/[0-9]+', '/{id}', path)
+        # Handle common ID patterns (using pre-compiled regex)
+        path = UUID_PATTERN.sub('/{uuid}', path)
+        path = ID_PATTERN.sub('/{id}', path)
         
         return path or '/'
     
@@ -188,8 +195,8 @@ class HARParser:
             endpoint_key = f"{request.method}:{resource_path}"
             
             if endpoint_key not in endpoint_groups:
-                # Extract base path (remove trailing /{param})
-                base_path = re.sub(r'/\{[^}]+\}$', '', resource_path)
+                # Extract base path (remove trailing /{param}) using pre-compiled regex
+                base_path = BASE_PATH_PATTERN.sub('', resource_path)
                 endpoint_groups[endpoint_key] = APIEndpoint(
                     resource_path=resource_path,
                     base_path=base_path or resource_path,
