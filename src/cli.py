@@ -266,6 +266,26 @@ def serve(
     typer.echo(f"   Module: {module_path}")
     typer.echo(f"   Host: {host}:{port}")
     typer.echo(f"   Reload: {reload}")
+    
+    # Check if port is available
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind((host, port))
+        sock.close()
+    except OSError:
+        typer.echo(f"\n❌ Port {port} is already in use!")
+        typer.echo(f"\nSolutions:")
+        typer.echo(f"  1. Use a different port: mockclaw serve {mock_dir} --port 8001")
+        typer.echo(f"  2. Find and stop the process using port {port}:")
+        if sys.platform == 'win32':
+            typer.echo(f"     netstat -ano | findstr :{port}")
+            typer.echo(f"     taskkill /PID <PID> /F")
+        else:
+            typer.echo(f"     lsof -i :{port}")
+            typer.echo(f"     kill -9 <PID>")
+        raise typer.Exit(1)
+    
     typer.echo(f"\n📖 API docs: http://{host.replace('0.0.0.0', 'localhost')}:{port}/docs")
     typer.echo(f"   Health: http://{host.replace('0.0.0.0', 'localhost')}:{port}/health")
     typer.echo(f"\nPress Ctrl+C to stop\n")
@@ -281,7 +301,14 @@ def serve(
     except KeyboardInterrupt:
         typer.echo("\n👋 Server stopped")
     except Exception as e:
-        typer.echo(f"❌ Server error: {e}")
+        error_msg = str(e)
+        if "Address already in use" in error_msg or "Only one usage of each socket address" in error_msg:
+            typer.echo(f"\n❌ Port {port} is already in use!")
+            typer.echo(f"\nSolutions:")
+            typer.echo(f"  1. Use a different port: mockclaw serve {mock_dir} --port 8001")
+            typer.echo(f"  2. Stop the existing server and try again")
+        else:
+            typer.echo(f"❌ Server error: {e}")
         raise typer.Exit(1)
 
 

@@ -497,7 +497,7 @@ class MockGenerator:
             "class PathTraversalMiddleware(BaseHTTPMiddleware):",
             "    async def dispatch(self, request: Request, call_next):",
             "        path = request.url.path",
-            "        dangerous = [r'\\.\\.', '%2e%2e', '%252e', '%2f%5c.\\.', '//']",
+            r"        dangerous = [r'\.\.', r'%2e%2e', r'%252e', r'%2f%5c\.\.', r'//']",
             "        for pattern in dangerous:",
             "            if re.search(pattern, path, re.IGNORECASE):",
             "                return JSONResponse(status_code=400, content={'error': 'Invalid path', 'code': 'PATH_TRAVERSAL_BLOCKED'})",

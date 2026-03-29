@@ -41,7 +41,7 @@ web\start.bat
 #    - Done! Test at http://localhost:8000/docs
 ```
 
-**🎯 Total time:** < 2 minutes from install to testing
+**Total time:** < 2 minutes from install to testing
 
 ### Option 2: CLI (For Power Users)
 
@@ -61,16 +61,64 @@ pytest tests/ -v
 
 **Expected output:**
 ```
-✅ Generated 6/6 endpoints
-🚀 Server running on port 8000
-📖 API docs: http://localhost:8000/docs
+Generated 6/6 endpoints
+Server running on port 8000
+API docs: http://localhost:8000/docs
+```
+
+### Testing with Different Tools
+
+**Windows PowerShell:**
+```powershell
+# Health check
+Invoke-RestMethod -Uri http://localhost:8000/health
+
+# Test expired coupon
+$body = @{user_id="test123"; coupon_code="EXPIRED2026"; shipping_address="123 Main St"} | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/checkout -ContentType "application/json" -Body $body
+
+# Test valid coupon
+$body = @{user_id="test123"; coupon_code="SAVE10"; shipping_address="123 Main St"} | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/checkout -ContentType "application/json" -Body $body
+```
+
+**Python (Cross-Platform):**
+```python
+import requests
+
+# Health check
+requests.get('http://localhost:8000/health').json()
+
+# Test expired coupon
+requests.post('http://localhost:8000/checkout', 
+    json={'user_id': 'test123', 'coupon_code': 'EXPIRED2026', 'shipping_address': '123 Main St'})
+
+# Test valid coupon
+requests.post('http://localhost:8000/checkout',
+    json={'user_id': 'test123', 'coupon_code': 'SAVE10', 'shipping_address': '123 Main St'})
+```
+
+**cURL (Linux/Mac/Git Bash):**
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# Test expired coupon
+curl -X POST http://localhost:8000/checkout \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"test123","coupon_code":"EXPIRED2026","shipping_address":"123 Main St"}'
+
+# Test valid coupon
+curl -X POST http://localhost:8000/checkout \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"test123","coupon_code":"SAVE10","shipping_address":"123 Main St"}'
 ```
 
 ---
 
-## 🎬 Before vs After
+## Before vs After
 
-### ❌ Before MockClaw (The Old Way)
+### Before MockClaw (The Old Way)
 
 ```bash
 # 1. Manually write mock config (2-3 hours)
@@ -106,7 +154,7 @@ EOF
 # Total: 5+ hours of soul-crushing work
 ```
 
-### ✅ After MockClaw (The God-Mode Way)
+### After MockClaw (The God-Mode Way)
 
 ```bash
 # 1. Browse your app once (automatic HAR capture)
@@ -121,7 +169,7 @@ python -m src.cli serve ./mocks
 
 ---
 
-## 🎯 Why MockClaw?
+## Why MockClaw?
 
 ### Core Pain Points We Solve
 
@@ -140,7 +188,7 @@ python -m src.cli serve ./mocks
 
 ---
 
-## 📸 See It In Action
+## See It In Action
 
 ### Web Interface
 
@@ -160,7 +208,7 @@ Generated code from a single HAR file:
 async def post__checkout(request: Request):
     body = await request.json()
     
-    # ✅ Auto-generated conditional routing
+    # Auto-generated conditional routing
     if body.get("coupon_code") == "EXPIRED2026":
         raise HTTPException(400, detail={"error": "Coupon expired"})
     elif body.get("coupon_code") == "SAVE10":
@@ -173,29 +221,29 @@ async def post__checkout(request: Request):
 
 ---
 
-## 🛠️ Core Features
+## Core Features
 
-### 🎯 Smart Fallback Engine
+### Smart Fallback Engine
 
 - **Rule-based routing** - Analyzes request bodies to generate if/elif/else logic
 - **No LLM required** - Works offline with zero API keys
 - **Backward compatible** - Falls back to first response if no patterns match
 
-### 🔒 Auto-Injected Security
+### Auto-Injected Security
 
 Every generated mock includes:
 - **Rate Limiting** (60 requests/minute per IP)
 - **Path Traversal Protection** (blocks `../` attacks)
 - **Global Error Handling** (safe JSON responses)
 
-### 🎪 Interactive API Docs
+### Interactive API Docs
 
 Built-in Swagger UI at `http://localhost:8000/docs`:
 - Test endpoints directly in browser
 - View request/response schemas
 - Download OpenAPI spec
 
-### 🥋 Chaos Engineering
+### Chaos Engineering
 
 Built-in adversarial testing:
 ```bash
@@ -207,15 +255,15 @@ python scripts/hardcore_chaos_test.py --use-docker
 ```
 
 **Tests include:**
-- 💀 Container kill during requests
-- 🌐 Network drop simulation
-- 💾 Disk pressure (fill to 99%)
-- 🗑️ Garbage payload handling
-- 🔓 Path traversal attacks
+- Container kill during requests
+- Network drop simulation
+- Disk pressure (fill to 99%)
+- Garbage payload handling
+- Path traversal attacks
 
 ---
 
-## 📚 Documentation
+## Documentation
 
 ### CLI Commands
 
@@ -243,7 +291,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for technical deep-dive.
 
 ---
 
-## 🎓 Use Cases
+## Use Cases
 
 ### 1. Frontend Development
 
@@ -290,7 +338,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for technical deep-dive.
 
 ---
 
-## 🚀 Advanced Usage
+## Advanced Usage
 
 ### LLM-Assisted Generation
 
@@ -344,7 +392,7 @@ curl http://localhost:8000/health
 
 ---
 
-## 📊 Benchmarks
+## Benchmarks
 
 | Metric | MockClaw | Manual Setup |
 |--------|----------|--------------|
@@ -352,11 +400,11 @@ curl http://localhost:8000/health
 | **Config size** | Auto-generated | 500+ lines JSON |
 | **Security** | Auto-injected | Manual (often forgotten) |
 | **Edge cases** | Recorded from traffic | Manually crafted |
-| **CI/CD ready** | ✅ Yes | ❌ Usually not |
+| **CI/CD ready** | Yes | Usually not |
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 ### Quick Start for Developers
 
@@ -381,13 +429,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 
 ---
 
-## 📈 Roadmap
+## Roadmap
 
 ### Sprint 3 (Current)
-- ✅ Smart Fallback bug fixes
-- ✅ Web UI MVP (Streamlit)
-- 🔄 Fresh Install testing (< 2 min FTUE)
-- 📝 Viral README and demo GIFs
+- [x] Smart Fallback bug fixes
+- [x] Web UI MVP (Streamlit)
+- [ ] Fresh Install testing (< 2 min FTUE)
+- [ ] Viral README and demo GIFs
 
 ### Upcoming
 - [ ] WebSocket support
@@ -397,7 +445,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 Built with:
 - [FastAPI](https://fastapi.tiangolo.com/) - Modern Python web framework
@@ -407,13 +455,13 @@ Built with:
 
 ---
 
-## 📄 License
+## License
 
 MIT License - See [LICENSE](LICENSE) file.
 
 ---
 
-## 💬 Join the Community
+## Join the Community
 
 - **GitHub Issues:** [Report bugs or request features](https://github.com/mockclaw/mockclaw/issues)
 - **Discussions:** [Share your use cases](https://github.com/mockclaw/mockclaw/discussions)
@@ -423,8 +471,8 @@ MIT License - See [LICENSE](LICENSE) file.
 
 <div align="center">
 
-**Made with ❤️ by Test Developers, for Test Developers**
+**Made with love by Test Developers, for Test Developers**
 
-[⬆ Back to Top](#-mockclaw---god-mode-for-api-mocking)
+[Back to Top](#mockclaw---god-mode-for-api-mocking)
 
 </div>
