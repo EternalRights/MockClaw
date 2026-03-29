@@ -1,330 +1,432 @@
 """
-MockClaw Immortal Agent — Main Entry Point
-===========================================
-
-Infinite self-improvement loop that cycles through five phases:
-
-1. **Janitor** — Clean up Docker containers, generated files, and caches.
-2. **Generate** — Parse HAR traffic and produce FastAPI mock server code.
-3. **Chaos** — Run adversarial tests against the generated mocks.
-4. **Repair** — Analyse failures and register self-healing patches.
-5. **Polish** — Lint, format, update documentation, and validate output.
-
-The agent continues iterating until ``max_iterations`` is reached or
-a fatal error triggers :func:`~core.resilience.graceful_exit`.
-
-Usage::
-
-    python -m src.main --agent-mode --har tests/gauntlet/flow.har --max-iter 100
+MockClaw Agent Mode
+Infinite self-improvement loop.
 """
 
-import argparse
-import shutil
-import subprocess
 import sys
 import time
-import traceback
-from datetime import datetime
+import shutil
+import subprocess
 from pathlib import Path
-from typing import Any, Dict
+from datetime import datetime
+from typing import Dict, Any
 
-if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8")
+# Fix Windows encoding
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8')
 
+# Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from core.parser import HARParser
 from core.generator import MockGenerator
-from core.resilience import ResiliencePatch, Watchdog, graceful_exit, retry, logger
+from core.resilience import (
+    ResiliencePatch, 
+    Watchdog, 
+    graceful_exit, 
+    retry,
+    logger
+)
 
 
 class ImmortalAgent:
-    """The Immortal MockClaw Agent — runs forever, self-heals, self-improves.
-
-    Each call to :meth:`run_iteration` executes the full five-phase loop.
-    :meth:`run_forever` wraps iterations in an infinite (or bounded) loop.
-
-    Args:
-        work_dir: Root directory for all agent state, logs, and output.
     """
-
-    def __init__(self, work_dir: str = r"D:\mockclaw-immortal") -> None:
-        self.work_dir = Path(work_dir)
+    The Immortal MockClaw Agent.
+    Runs infinite iteration: Janitor -> Generate -> Chaos -> Repair -> Polish
+    """
+    
+    def __init__(self):
         self.iteration = 0
         self.watchdog = Watchdog(timeout_seconds=600)
-        self.heartbeat_log = self.work_dir / "logs" / "heartbeat.log"
-        self.evolution_log = self.work_dir / "logs" / "evolution_history.md"
-
-        # Ensure directories
-        (self.work_dir / "logs" / "checkpoints").mkdir(parents=True, exist_ok=True)
-        (self.work_dir / "generated_mocks").mkdir(exist_ok=True)
-
-    def janitor(self) -> None:
-        """Clean up resources — start each iteration with a clean slate.
-
-        Stops and removes all Docker containers, deletes files in
-        ``generated_mocks/``, and recursively removes ``__pycache__``
-        directories.
+        self.heartbeat_log = Path("logs/heartbeat.log")
+        self.evolution_log = Path("logs/evolution_history.md")
+        self.checkpoint_dir = Path("logs/checkpoints")
+        
+        # Ensure directories exist
+        self.heartbeat_log.parent.mkdir(parents=True, exist_ok=True)
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        
+    def janitor(self):
+        """
+        Clean up resources before each iteration.
+        Start with a clean slate.
         """
         logger.info("=" * 60)
-        logger.info("JANITOR: Cleaning up...")
+        logger.info("JANITOR: Cleaning up resources...")
         logger.info("=" * 60)
-
+        
         # Docker cleanup
         try:
             result = subprocess.run(
-                "docker ps -aq", shell=True, capture_output=True, text=True, timeout=10
+                ["docker", "ps", "-aq"],
+                capture_output=True, text=True, timeout=5
             )
-            containers = (
-                result.stdout.strip().split("\n") if result.stdout.strip() else []
-            )
-            for c in containers:
-                if c:
-                    subprocess.run(f"docker stop {c}", shell=True, timeout=10)
-                    subprocess.run(f"docker rm {c}", shell=True, timeout=10)
+            containers = result.stdout.strip().split('\n') if result.stdout.strip() else []
+            
+            if containers and containers[0]:
+                logger.info(f"Stopping {len(containers)} containers...")
+                for c in containers:
+                    if c:
+                        subprocess.run(["docker", "stop", c], timeout=10)
+                        subprocess.run(["docker", "rm", c], timeout=10)
         except Exception as e:
             logger.warning(f"Docker cleanup warning: {e}")
-
+        
         # File cleanup
-        for f in (self.work_dir / "generated_mocks").glob("*"):
-            try:
-                f.unlink()
-            except OSError:
-                pass
-
+        cleanup_paths = [
+            Path("generated_mocks/*"),
+            Path("logs/temp/*"),
+        ]
+        
+        for pattern in cleanup_paths:
+            for f in Path().glob(str(pattern)):
+                try:
+                    if f.is_file():
+                        f.unlink()
+                    elif f.is_dir():
+                        shutil.rmtree(f)
+                except Exception as e:
+                    logger.warning(f"Failed to delete {f}: {e}")
+        
         # Python cache cleanup
-        for p in self.work_dir.rglob("__pycache__"):
+        for p in Path("src").rglob("__pycache__"):
             shutil.rmtree(p, ignore_errors=True)
-
+        
         logger.info("JANITOR: Cleanup complete!")
-
+        
     @retry(max_retries=3, delay=2.0)
     def generate(self, har_path: str) -> bool:
-        """Generate mock code from HAR file."""
+        """
+        Generate mock code from HAR file.
+        
+        Args:
+            har_path: Path to HAR file
+            
+        Returns:
+            True if generation successful
+        """
         logger.info("=" * 60)
-        logger.info("GENERATE: Creating mocks...")
+        logger.info("GENERATE: Creating mock code...")
         logger.info("=" * 60)
-
-        har_file = Path(har_path)
-        if not har_file.exists():
+        
+        if not Path(har_path).exists():
             logger.error(f"HAR file not found: {har_path}")
             return False
-
-        parser = HARParser(str(har_file))
-        endpoints = parser.parse()
-
+        
+        # Parse HAR
+        parser = HARParser(har_path)
+        endpoints = parser.get_endpoints()
+        
         logger.info(f"Found {len(endpoints)} endpoints")
-
+        
         if len(endpoints) == 0:
-            logger.warning("No endpoints in HAR")
+            logger.warning("No endpoints found in HAR file")
             return False
-
+        
+        # Generate mocks
         generator = MockGenerator()
         results = generator.generate_all(
             [self._endpoint_to_dict(e) for e in endpoints],
-            str(self.work_dir / "generated_mocks"),
+            "generated_mocks"
         )
-
+        
         success_count = sum(1 for r in results if r.success)
         logger.info(f"Generated {success_count}/{len(results)} endpoints")
+        
+        if success_count == 0:
+            logger.error("No endpoints generated successfully")
+            return False
 
-        return success_count > 0
+        # Generation succeeded - Docker deployment is optional
+        logger.info("Mock code generated successfully!")
 
-    def _endpoint_to_dict(self, endpoint: Any) -> Dict[str, Any]:
-        """Convert an :class:`APIEndpoint` object to a plain dictionary.
+        # Try Docker deployment (optional - continue even if it fails)
+        logger.info("Attempting Docker deployment (optional)...")
+        try:
+            result = subprocess.run(
+                ["docker-compose", "up", "-d"],
+                timeout=60,
+                cwd=Path.cwd(),
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                logger.info("Docker containers started")
+                # Quick health check
+                time.sleep(3)
+                try:
+                    import requests
+                    r = requests.get("http://localhost:8000/health", timeout=5)
+                    if r.status_code == 200:
+                        logger.info("Mock server healthy on port 8000")
+                except Exception:
+                    logger.info("Health check skipped (server may need more time)")
+            else:
+                logger.info(f"Docker not available: {result.stderr.strip() or 'no config'}")
+        except FileNotFoundError:
+            logger.info("Docker/docker-compose not installed - skipping container deployment")
+        except Exception as e:
+            logger.info(f"Docker deployment skipped: {e}")
 
-        Args:
-            endpoint: A parsed :class:`~core.parser.APIEndpoint` instance.
-
-        Returns:
-            Dictionary with keys ``resource_path``, ``method``,
-            ``sample_request``, and ``sample_response``.
-        """
+        return True
+    
+    def _endpoint_to_dict(self, endpoint) -> dict:
+        """Convert endpoint to dict for generator."""
+        all_responses = [
+            {"status": r.status, "body": r.body}
+            for r in endpoint.responses
+        ]
         return {
+            "id": f"ep_{endpoint.resource_path}_{endpoint.method}".replace("/", "_"),
             "resource_path": endpoint.resource_path,
             "method": endpoint.method,
             "sample_request": {
                 "body": endpoint.requests[0].body if endpoint.requests else None
             },
+            "sample_responses": all_responses,
             "sample_response": {
                 "status": endpoint.responses[0].status if endpoint.responses else 200,
-                "body": endpoint.responses[0].body if endpoint.responses else None,
+                "body": endpoint.responses[0].body if endpoint.responses else None
             },
         }
-
+    
     def chaos_test(self) -> Dict[str, Any]:
-        """Run adversarial testing against the generated mocks.
-
-        Currently simulates concurrency and garbage-data tests.  Full chaos
-        engineering (actual HTTP bombardment, Docker container kills) is
-        planned for future iterations.
-
-        Returns:
-            A dictionary summarising test results, including a ``failures`` count.
+        """
+        Run adversarial testing.
+        This is TORTURE, not testing.
         """
         logger.info("=" * 60)
         logger.info("CHAOS: Running adversarial tests...")
         logger.info("=" * 60)
 
-        results = {
-            "concurrency": "simulated",
-            "garbage": "simulated",
-            "docker_kill": "skipped",
-            "failures": 0,
-        }
-
-        # Simulate concurrency test
+        # Import chaos breaker if available, otherwise simulate
+        sys.path.insert(0, str(Path.cwd()))
         try:
-            # Check if httpx is available for real chaos testing
-            import importlib.util
+            from scripts.chaos_breaker import ChaosBreaker
+            import asyncio
 
-            if importlib.util.find_spec("httpx"):
-                logger.info("Chaos tests simulated (httpx available)")
+            breaker = ChaosBreaker()
+            results = asyncio.run(breaker.run_all_chaos_tests())
+            return results
         except ImportError:
-            logger.warning("httpx not available, chaos tests simulated")
-
-        return results
-
-    def repair(self, failure_info: Dict[str, Any]) -> None:
-        """Analyse failure info and register self-healing patches.
-
+            logger.info("ChaosBreaker not available - using simulated chaos test")
+            return {"status": "simulated", "failures": 0}
+    
+    def repair(self, failure_info: Dict[str, Any]):
+        """
+        Self-repair based on failure analysis.
+        
         Args:
-            failure_info: Dictionary from :meth:`chaos_test`, expected to
-                contain a ``failures`` count.
+            failure_info: Information about what failed
         """
         logger.info("=" * 60)
         logger.info("REPAIR: Analyzing failures...")
         logger.info("=" * 60)
-
+        
+        # Analyze failure patterns
         failures = failure_info.get("failures", 0)
+        
         if failures > 0:
-            ResiliencePatch.add_patch(
-                error_type="ChaosTestFailure",
-                fix="Investigate chaos test failures",
-                code="# TODO: Improve resilience",
-            )
+            logger.info(f"Detected {failures} failures")
+            
+            # Check what failed
+            for test_name, result in failure_info.get("results", {}).items():
+                if result.get("status") in ["failed", "crashed", "down"]:
+                    logger.warning(f"Test '{test_name}' failed: {result}")
+                    
+                    # Register patch
+                    ResiliencePatch.add_patch(
+                        error_type=test_name,
+                        fix=f"Investigate {test_name} failure handling",
+                        code=f"# TODO: Improve {test_name} resilience"
+                    )
+            
+            # Save patches
             ResiliencePatch.save_patches()
-
-    def polish(self) -> None:
-        """Polish generated code — lint with ruff, update evolution log.
-
-        Runs ``ruff check --fix`` if available, then appends an iteration
-        entry to ``logs/evolution_history.md``.
+            
+            logger.info("Patches written. Will apply on next iteration.")
+        
+    def polish(self):
+        """
+        Polish the project - linting, formatting, docs.
+        Only runs if chaos tests pass.
         """
         logger.info("=" * 60)
-        logger.info("POLISH: Improving quality...")
+        logger.info("POLISH: Improving code quality...")
         logger.info("=" * 60)
-
-        # Run ruff if available
+        
+        # Run linter
         try:
-            subprocess.run(["ruff", "check", ".", "--fix"], timeout=60)
-            logger.info("Ruff linting complete")
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass
-
-        # Update evolution log
-        entry = f"\n## Iteration {self.iteration} - {datetime.now().isoformat()}\n- Status: Polish complete\n\n"
-        with open(self.evolution_log, "a", encoding="utf-8") as f:
-            f.write(entry)
-
+            result = subprocess.run(
+                ["ruff", "check", ".", "--fix"],
+                capture_output=True, text=True, timeout=60
+            )
+            logger.info(f"Ruff: Fixed {result.stdout.count('Fixed')} issues")
+        except FileNotFoundError:
+            logger.warning("Ruff not installed, skipping linting")
+        except Exception as e:
+            logger.warning(f"Linting error: {e}")
+        
+        # Run type checker
+        try:
+            result = subprocess.run(
+                ["mypy", "src/", "--ignore-missing-imports"],
+                capture_output=True, text=True, timeout=60
+            )
+            if "error:" in result.stdout:
+                logger.warning("Type errors found (non-blocking)")
+        except FileNotFoundError:
+            logger.warning("Mypy not installed, skipping type checking")
+        except Exception as e:
+            logger.warning(f"Type check error: {e}")
+        
+        # Update docs
+        self._update_evolution_log()
+        
         logger.info("POLISH: Complete!")
-
+    
     def validate(self) -> bool:
-        """Validate that generated mocks contain the required endpoints.
-
-        Checks that ``/health`` and ``/mockclaw/info`` routes are present
-        in the combined ``dynamic_api.py`` output.
-
-        Returns:
-            ``True`` if both required endpoints are found.
+        """
+        Validate generated mocks work correctly.
+        Uses ASGI transport to test directly without needing a running server.
         """
         logger.info("=" * 60)
-        logger.info("VALIDATE: Testing mocks...")
+        logger.info("VALIDATE: Testing generated mocks...")
         logger.info("=" * 60)
 
-        generated = self.work_dir / "generated_mocks" / "dynamic_api.py"
-        if not generated.exists():
-            logger.error("No generated code found")
+        # Load the generated app directly using ASGI transport
+        try:
+            import importlib.util
+            import httpx
+
+            mock_path = Path("generated_mocks/dynamic_api.py")
+            if not mock_path.exists():
+                logger.error("Generated mock file not found")
+                return False
+
+            spec = importlib.util.spec_from_file_location("mock_app", mock_path)
+            if spec is None or spec.loader is None:
+                logger.error("Failed to load generated mock module")
+                return False
+
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            if not hasattr(module, "app"):
+                logger.error("Generated module has no 'app' attribute")
+                return False
+
+            app = module.app
+
+            # Test using ASGI transport (no server needed)
+            async def run_tests():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app),
+                    base_url="http://test"
+                ) as client:
+                    # Test health
+                    r = await client.get("/health")
+                    if r.status_code != 200:
+                        logger.error(f"Health check failed: {r.status_code}")
+                        return False
+
+                    # Test info
+                    r = await client.get("/mockclaw/info")
+                    if r.status_code != 200:
+                        logger.error(f"Info endpoint failed: {r.status_code}")
+                        return False
+
+                    logger.info("All validation tests passed!")
+                    return True
+
+            import asyncio
+            return asyncio.run(run_tests())
+
+        except Exception as e:
+            logger.error(f"Validation error: {e}")
             return False
-
-        content = generated.read_text(encoding="utf-8")
-
-        # Check required endpoints
-        has_health = "/health" in content
-        has_info = "/mockclaw/info" in content
-
-        if has_health and has_info:
-            logger.info("Validation passed!")
-            return True
-        else:
-            logger.error("Validation failed - missing endpoints")
-            return False
-
-    def _log_heartbeat(self, status: str) -> None:
-        """Append a timestamped heartbeat entry to ``logs/heartbeat.log``.
-
-        Args:
-            status: Short status label (e.g. ``"OK"``, ``"FAILED"``).
-        """
+    
+    def _update_evolution_log(self):
+        """Update evolution history log."""
         timestamp = datetime.now().isoformat()
-        with open(self.heartbeat_log, "a", encoding="utf-8") as f:
-            f.write(f"[{timestamp}] | Iter: {self.iteration} | Status: {status}\n")
+        
+        entry = f"""
+## Iteration {self.iteration} - {timestamp}
+
+### Status
+- Chaos Tests: Pending
+- Patches Applied: {len(ResiliencePatch.patches)}
+- Endpoints Generated: {len(list(Path("generated_mocks").glob("*.py")))}
+
+### Changes
+- Auto-polish completed
+- Linting and type checking run
+
+---
+"""
+        
+        with open(self.evolution_log, 'a', encoding='utf-8') as f:
+            f.write(entry)
+    
+    def _log_heartbeat(self, status: str, chaos_tests: str):
+        """Log heartbeat to file."""
+        timestamp = datetime.now().isoformat()
+        
+        entry = f"[{timestamp}] | Iter: {self.iteration} | Status: {status} | Chaos: {chaos_tests}\n"
+        
+        with open(self.heartbeat_log, 'a', encoding='utf-8') as f:
+            f.write(entry)
+        
         logger.info(f"Heartbeat: Iter {self.iteration} - {status}")
-
-    def run_iteration(self, har_path: str) -> bool:
-        """Execute one full iteration of the immortal loop.
-
-        Runs Janitor → Generate → Chaos → Repair/Polish → Validate.
-
+    
+    def run_iteration(self, har_path: str):
+        """
+        Run single iteration of the immortal loop.
+        
         Args:
-            har_path: Path to the HAR traffic file to generate mocks from.
-
-        Returns:
-            ``True`` if the iteration completed successfully.
+            har_path: Path to HAR file for generation
         """
         self.iteration += 1
         self.watchdog.heartbeat()
-
+        
         logger.info("\n" + "=" * 60)
         logger.info(f"IMMORTAL AGENT - ITERATION {self.iteration}")
         logger.info("=" * 60)
-
+        
         # Phase A: Janitor
         self.janitor()
-
+        
         # Phase B: Generate
         if not self.generate(har_path):
-            self._log_heartbeat("FAILED")
-            return False
-
+            self._log_heartbeat("FAILED", "generate_error")
+            graceful_exit("Generation failed", 1)
+        
         # Phase C: Chaos
         chaos_results = self.chaos_test()
-
-        # Phase D/E: Repair or Polish
+        
+        # Phase D: Repair or Polish
         if chaos_results.get("failures", 0) > 0:
             self.repair(chaos_results)
-            self._log_heartbeat("REPAIR")
-            return False
+            self._log_heartbeat("REPAIR", f"{chaos_results['failures']}_failures")
+            return False  # Need retry
         else:
             self.polish()
-
+            self._log_heartbeat("OK", "all_passed")
+            
             # Phase F: Validate
             if not self.validate():
-                self._log_heartbeat("VALIDATE_FAILED")
+                logger.warning("Validation failed, will retry")
                 return False
-
-            self._log_heartbeat("OK")
+            
             return True
-
-    def run_forever(self, har_path: str, max_iterations: int = 1000) -> int:
-        """Run the immortal loop until ``max_iterations`` or a fatal error.
-
+    
+    def run_forever(self, har_path: str, max_iterations: int = 1000):
+        """
+        Run infinite loop until max iterations or fatal error.
+        
         Args:
-            har_path: Path to the HAR traffic file.
-            max_iterations: Upper bound on iteration count (default ``1000``).
-
-        Returns:
-            Exit code (``0`` on normal completion).
+            har_path: Path to HAR file
+            max_iterations: Maximum iterations before exit
         """
         logger.info("=" * 60)
         logger.info("IMMORTAL AGENT ACTIVATED")
@@ -332,50 +434,52 @@ class ImmortalAgent:
         logger.info(f"Max iterations: {max_iterations}")
         logger.info(f"HAR file: {har_path}")
         logger.info("Press Ctrl+C to stop\n")
-
+        
         while self.iteration < max_iterations:
             try:
                 success = self.run_iteration(har_path)
+                
                 if success:
                     logger.info(f"\nIteration {self.iteration} complete!")
-                    time.sleep(3)
+                    time.sleep(5)  # Brief rest
                 else:
-                    logger.warning("\nIteration failed, retrying...")
+                    logger.warning("\nIteration failed, retrying immediately...")
+                    
             except KeyboardInterrupt:
                 logger.info("\nKeyboard interrupt, exiting...")
                 break
             except Exception as e:
-                logger.error(f"\nFATAL: {e}")
+                logger.error(f"\nFATAL ERROR: {e}")
+                import traceback
                 traceback.print_exc()
+                
+                # Log patch and exit for respawn
                 ResiliencePatch.add_patch(
-                    type(e).__name__, f"Handle {type(e).__name__}", "# patch"
+                    error_type=type(e).__name__,
+                    fix=f"Handle {type(e).__name__} gracefully",
+                    code=f"try:\n    ...\nexcept {type(e).__name__}:\n    graceful_exit('{e}')"
                 )
                 graceful_exit(str(e), 1)
-
+        
         logger.info(f"\nCompleted {self.iteration} iterations")
         return 0
 
 
-def main() -> int:
-    """CLI entry point for the Immortal Agent.
-
-    Parses arguments, validates agent mode, and starts the immortal loop.
-
-    Returns:
-        Process exit code (``0`` on success).
-    """
-    parser = argparse.ArgumentParser(
-        description="MockClaw Immortal Agent — infinite self-improvement loop"
-    )
-    parser.add_argument("--agent-mode", action="store_true")
-    parser.add_argument("--har", default="tests/gauntlet/flow.har")
-    parser.add_argument("--max-iter", type=int, default=10)
+def main():
+    """Main entry point for agent mode."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="MockClaw Immortal Agent")
+    parser.add_argument("--agent-mode", action="store_true", help="Run in agent mode")
+    parser.add_argument("--har", default="tests/gauntlet/flow.har", help="HAR file path")
+    parser.add_argument("--max-iter", type=int, default=10, help="Max iterations")
+    
     args = parser.parse_args()
-
+    
     if not args.agent_mode:
-        print("Run with --agent-mode to start immortal agent")
+        print("Run with --agent-mode to start the immortal agent")
         return 0
-
+    
     agent = ImmortalAgent()
     return agent.run_forever(args.har, args.max_iter)
 

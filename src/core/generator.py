@@ -1,29 +1,18 @@
 """
-MockClaw Core — Mock Generator
-===============================
-
-Generates FastAPI mock server code from parsed HAR endpoints.
-
-The generator supports two modes:
-
-1. **LLM-assisted** — When an OpenAI-compatible API key is available,
-   the generator sends endpoint schemas to the model for more realistic
-   mock implementations.
-2. **Fallback (template)** — When no LLM is configured, simple stub
-   endpoints are generated from the HAR response data directly.
-
-Typical usage::
-
-    gen = MockGenerator()  # picks up LLM_API_KEY from env
-    results = gen.generate_all(endpoints, "output/")
-    for r in results:
-        print(f"{r.endpoint_path}: {'✅' if r.success else '❌'}")
+MockClaw AI Generator
+Uses LLM to generate FastAPI mock endpoints from parsed HAR data.
 """
 
+from __future__ import annotations
+
+import json
 import os
-from dataclasses import dataclass
+import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from openai import OpenAI
 
 try:
     from openai import OpenAI
@@ -33,103 +22,240 @@ except ImportError:
     OPENAI_AVAILABLE = False
 
 
-@dataclass
+SYSTEM_PROMPT = """You are an expert API architect. Given this HTTP request/response pair, generate a Python FastAPI endpoint.
+
+Requirements:
+1. Use Pydantic models for request/response validation
+2. Use 'Faker' library to generate realistic fake data for fields like 'name', 'email', 'address', 'phone', 'id'
+3. If the response contains a list, generate exactly 5 items
+4. Handle path parameters (e.g., /users/{user_id}) correctly
+5. Support query parameters for filtering
+6. If request has a query param `?status=error`, return a 500 error with a specific error message
+7. Include proper HTTP status codes and error handling
+
+Generate ONLY the Python code with:
+- Pydantic models for request/response
+- FastAPI route decorators (@app.get, @app.post, etc.)
+- Faker data generation
+- Type hints throughout
+
+Return ONLY the Python code in a markdown code block labeled 'python'."""
+
+
 class GenerationResult:
-    """Result of a single endpoint mock generation.
+    """Result of mock generation."""
 
-    Attributes:
-        success: Whether generation succeeded.
-        generated_code: The produced Python source code (empty on failure).
-        endpoint_path: The resource path of the target endpoint.
-        error: Error message if generation failed, otherwise ``None``.
+    def __init__(
+        self,
+        success: bool,
+        generated_code: str,
+        endpoint_path: str,
+        error: str | None = None,
+    ) -> None:
+        self.success = success
+        self.generated_code = generated_code
+        self.endpoint_path = endpoint_path
+        self.error = error
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_STATUS_EXC = {
+    400: "HTTP_400_BAD_REQUEST",
+    401: "HTTP_401_UNAUTHORIZED",
+    403: "HTTP_403_FORBIDDEN",
+    404: "HTTP_404_NOT_FOUND",
+}
+
+_FB = "    "  # function-body indent (4 spaces)
+
+
+def _body_literal(body_text: str) -> str:
+    """Compact JSON string literal from raw HAR body text."""
+    try:
+        parsed = json.loads(body_text)
+        return json.dumps(parsed, ensure_ascii=False)
+    except Exception:
+        return '"mock"'
+
+
+def _route_from_responses(
+    method: str,
+    path: str,
+    all_responses: list[dict[str, Any]],
+    func_name: str,
+) -> str:
+    """Build a complete FastAPI route string for one endpoint.
+
+    When multiple responses exist, the first (default) response is used at
+    runtime and the docstring lists all observed HAR scenarios for reference.
     """
+    sc0 = all_responses[0].get("status", 200)
+    body0 = _body_literal(all_responses[0].get("body") or "")
 
-    success: bool
-    generated_code: str
-    endpoint_path: str
-    error: Optional[str] = None
+    if 400 <= sc0 < 600:
+        exc = _STATUS_EXC.get(sc0, "HTTP_500_INTERNAL_SERVER_ERROR")
+        body_code = f"{_FB}raise HTTPException(status_code=status.{exc},detail={body0})"
+    else:
+        body_code = f"{_FB}return {body0}"
+
+    if len(all_responses) > 1:
+        # Docstring: list all observed HAR scenarios
+        lines = [
+            f'@app.{method.lower()}("{path}")',
+            f"async def {func_name}():",
+            f'{_FB}"""Mock endpoint -- {len(all_responses)} HAR scenarios recorded.',
+        ]
+        for i, resp in enumerate(all_responses, start=1):
+            sc = resp.get("status", 200)
+            preview = (resp.get("body") or "")[:60]
+            lines.append(f'{_FB}  [{i}] status {sc}: {preview}')
+        lines.append(f'{_FB}"""')
+        lines.append(body_code)
+        return "\n".join(lines) + "\n"
+
+    return (
+        f'@app.{method.lower()}("{path}")\n'
+        f"async def {func_name}():\n"
+        f'{_FB}"""Mock endpoint -- HAR status {sc0}."""\n'
+        f"{body_code}\n"
+    )
+
+
+# ---------------------------------------------------------------------------
+# MockGenerator
+# ---------------------------------------------------------------------------
 
 
 class MockGenerator:
-    """Generates FastAPI mock endpoints from HAR-parsed endpoint data.
+    """Generates FastAPI mock endpoints from HAR endpoint data.
 
-    If an LLM API key is provided (via ``api_key``, ``LLM_API_KEY``, or
-    ``OPENAI_API_KEY`` env vars), the generator will attempt to produce
-    more realistic mock implementations.  Otherwise it falls back to
-    simple template-based stubs.
+    Supports two modes:
+    - **LLM-assisted** -- when an OpenAI-compatible API key is configured, sends
+      endpoint schemas to the model for realistic mock implementations.
+    - **Fallback (template)** -- when no LLM is configured, generates stub
+      endpoints directly from the HAR response data.
 
     Args:
-        api_key: Optional OpenAI-compatible API key.  Falls back to
-                 ``LLM_API_KEY`` then ``OPENAI_API_KEY`` env vars.
-        model: Model identifier (default from ``MODEL_NAME`` env,
-               or ``gpt-4o-mini``).
+        api_key: Optional API key. Falls back to LLM_API_KEY then
+                 OPENAI_API_KEY env vars.
+        model: Model identifier (default gpt-4o-mini, from MODEL_NAME env).
     """
 
+    # Endpoints always provided by the boilerplate, skipped if present in HAR.
+    _BUILTIN_PATHS = {"/health", "/mockclaw/info"}
+
     def __init__(
-        self, api_key: Optional[str] = None, model: Optional[str] = None
+        self, api_key: str | None = None, model: str | None = None
     ) -> None:
-        self.api_key = (
-            api_key or os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+        self.api_key = api_key or os.getenv("LLM_API_KEY") or os.getenv(
+            "OPENAI_API_KEY"
         )
         self.model = model or os.getenv("MODEL_NAME", "gpt-4o-mini")
-        self.client = None
+        self.client: Any = None
 
         if OPENAI_AVAILABLE and self.api_key:
             try:
-                self.client = OpenAI(api_key=self.api_key)
-            except Exception as e:
-                print(f"[GENERATOR] Warning: Could not initialize LLM client: {e}")
+                kwargs: dict[str, Any] = {"api_key": self.api_key}
+                if base_url := os.getenv("LLM_BASE_URL"):
+                    kwargs["base_url"] = base_url
+                self.client = OpenAI(**kwargs)
+            except Exception:  # pragma: no cover
+                self.client = None
 
-    def _generate_fallback_code(self, endpoint_data: Dict[str, Any]) -> str:
-        """Generate a simple template-based mock endpoint (no LLM required).
+    # ------------------------------------------------------------------
+    # LLM path
+    # ------------------------------------------------------------------
 
-        Produces a minimal FastAPI route that returns the sample response
-        body from the HAR recording.
+    def _build_prompt(self, endpoint_data: dict[str, Any]) -> str:
+        req = endpoint_data.get("sample_request", {})
+        resp = endpoint_data.get("sample_response", {})
+        return (
+            f"Generate a FastAPI mock endpoint for:\n\n"
+            f"Method: {endpoint_data['method']}\n"
+            f"Path: {endpoint_data['resource_path']}\n\n"
+            f"Sample Request:\n"
+            f"- Body: {req.get('body', 'N/A')}\n"
+            f"- Query Params: {json.dumps(req.get('query_params', {}), indent=2)}\n\n"
+            f"Sample Response:\n"
+            f"- Status: {resp.get('status', 200)}\n"
+            f"- Body: {resp.get('body', 'N/A')}"
+        )
 
-        Args:
-            endpoint_data: Dictionary with keys ``method``, ``resource_path``,
-                ``sample_response.status``, and ``sample_response.body``.
+    @staticmethod
+    def _extract_code_block(response: str) -> str:
+        if match := re.search(r"```python\n(.*?)```", response, re.DOTALL):
+            return match.group(1).strip()
+        if match := re.search(r"```\n?(.*?)```", response, re.DOTALL):
+            return match.group(1).strip()
+        return response.strip()
 
-        Returns:
-            A string of Python source code for the mock endpoint.
-        """
+    def _generate_with_llm(self, endpoint_data: dict[str, Any]) -> str:
+        if not self.client:
+            return self._generate_fallback_code(endpoint_data)
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": self._build_prompt(endpoint_data)},
+                ],
+                temperature=0.3,
+                max_tokens=2000,
+            )
+            return self._extract_code_block(
+                response.choices[0].message.content or ""
+            )
+        except Exception:
+            return self._generate_fallback_code(endpoint_data)
+
+    # ------------------------------------------------------------------
+    # Fallback path
+    # ------------------------------------------------------------------
+
+    def _generate_fallback_code(self, endpoint_data: dict[str, Any]) -> str:
         method = endpoint_data["method"]
         path = endpoint_data["resource_path"]
-        response_body = endpoint_data.get("sample_response", {}).get("body", "{}")
+        all_responses: list[dict[str, Any]] = endpoint_data.get(
+            "sample_responses",
+            [endpoint_data.get("sample_response", {})],
+        )
+        func_name = "_".join(
+            filter(
+                None,
+                [
+                    method.lower(),
+                    path.replace("/", "_")
+                    .replace("{", "")
+                    .replace("}", ""),
+                ],
+            )
+        )
+        return _route_from_responses(method, path, all_responses, func_name)
 
-        return f'''
-@app.{method.lower()}("{path}")
-async def mock_{method.lower()}_{path.replace("/", "_").replace("{{", "").replace("}}", "")}():
-    """Mock endpoint auto-generated by MockClaw"""
-    return {response_body if response_body else '{{"status": "mock"}}'}
-'''
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
-    def generate_endpoint(self, endpoint_data: Dict[str, Any]) -> GenerationResult:
-        """Generate mock code for a single API endpoint.
-
-        Attempts LLM-assisted generation first; falls back to template
-        generation if the LLM client is unavailable.
-
-        Args:
-            endpoint_data: Endpoint schema dict (same format as produced
-                by :meth:`~core.parser.HARParser.export_as_dict`).
-
-        Returns:
-            A :class:`GenerationResult` with the generated code or error details.
-        """
+    def generate_endpoint(
+        self, endpoint_data: dict[str, Any]
+    ) -> GenerationResult:
         try:
-            if not self.client:
-                code = self._generate_fallback_code(endpoint_data)
-            else:
-                # Would call LLM here in production
-                code = self._generate_fallback_code(endpoint_data)
-
+            code = self._generate_with_llm(endpoint_data)
+            if "from fastapi import" not in code:
+                code = (
+                    "from fastapi import HTTPException, status\n"
+                    "from typing import Any\n\n"
+                    + code
+                )
             return GenerationResult(
                 success=True,
                 generated_code=code,
                 endpoint_path=endpoint_data["resource_path"],
             )
-        except Exception as e:
+        except Exception as e:  # pragma: no cover
             return GenerationResult(
                 success=False,
                 generated_code="",
@@ -138,55 +264,81 @@ async def mock_{method.lower()}_{path.replace("/", "_").replace("{{", "").replac
             )
 
     def generate_all(
-        self, endpoints: List[Dict[str, Any]], output_dir: str
-    ) -> List[GenerationResult]:
-        """Generate mock code for all endpoints and write a combined server file.
-
-        Creates ``<output_dir>/dynamic_api.py`` containing FastAPI boilerplate,
-        health/info endpoints, and a generated route for each input endpoint.
-
-        Args:
-            endpoints: List of endpoint schema dictionaries.
-            output_dir: Directory to write the combined ``dynamic_api.py`` into.
-
-        Returns:
-            A list of :class:`GenerationResult` objects, one per endpoint.
-        """
+        self,
+        endpoints: list[dict[str, Any]],
+        output_dir: str = "generated_mocks",
+    ) -> list[GenerationResult]:
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
-        results = []
-        all_code = [
+        results: list[GenerationResult] = []
+
+        header = [
             "# MockClaw Auto-Generated Mock Server",
-            "from fastapi import FastAPI, HTTPException",
-            "from pydantic import BaseModel",
-            "from typing import Optional",
-            "import json",
+            "# Do not edit manually -- regenerate from HAR traffic.",
+            "",
+            "from fastapi import FastAPI, HTTPException, status",
+            "from typing import Any",
             "",
             "app = FastAPI(title='MockClaw Generated API')",
             "",
-            "@app.get('/health')",
+            '@app.get("/health")',
             "async def health():",
-            "    return {'status': 'OK', 'service': 'MockClaw'}",
+            f"{_FB}'''Health check endpoint.'''",
+            f'{_FB}return {{"status": "OK", "service": "MockClaw"}}',
             "",
-            "@app.get('/mockclaw/info')",
+            '@app.get("/mockclaw/info")',
             "async def info():",
-            "    return {'generator': 'MockClaw', 'version': '0.1.0'}",
+            f"{_FB}'''MockClaw metadata endpoint.'''",
+            f'{_FB}return {{"generator": "MockClaw", "version": "0.1.0"}}',
+            "",
+            "# === Generated Endpoints ===",
             "",
         ]
 
         for endpoint in endpoints:
+            if endpoint["resource_path"] in self._BUILTIN_PATHS:
+                continue
             result = self.generate_endpoint(endpoint)
             results.append(result)
             if result.success:
-                all_code.append(
-                    f"# Endpoint: {endpoint['method']} {endpoint['resource_path']}"
+                header.append(
+                    f"# {endpoint['method']} {endpoint['resource_path']}"
                 )
-                all_code.append(result.generated_code)
-                all_code.append("")
+                header.append(result.generated_code)
+                header.append("")
 
-        # Write combined file
-        combined_path = output_path / "dynamic_api.py"
-        combined_path.write_text("\n".join(all_code), encoding="utf-8")
-
+        (output_path / "dynamic_api.py").write_text(
+            "\n".join(header), encoding="utf-8"
+        )
         return results
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    """CLI for testing generation."""
+    import sys
+
+    if len(sys.argv) < 2:
+        print("Usage: python generator.py <path_to_har_file>")
+        sys.exit(1)
+
+    from core.parser import HARParser
+
+    parser = HARParser(sys.argv[1])
+    endpoints_data = parser.export_as_dict()
+    generator = MockGenerator()
+    results = generator.generate_all(endpoints_data["endpoints"])
+
+    print(f"Generated {len(results)} endpoints:")
+    for r in results:
+        symbol = "OK" if r.success else "FAIL"
+        print(f"  [{symbol}] {r.endpoint_path}")
+
+
+if __name__ == "__main__":
+    main()
