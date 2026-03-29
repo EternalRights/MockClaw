@@ -3,68 +3,77 @@ MockClaw Resilience Module
 Self-healing and error recovery utilities.
 """
 
+from __future__ import annotations
+
+import json
+import logging
 import os
+import signal
 import sys
 import time
-import signal
-import logging
-import traceback
-from functools import wraps
-from typing import Callable, Any, Optional
 from datetime import datetime
+from functools import wraps
+from pathlib import Path
+from typing import Any, Callable
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s | %(levelname)s | %(message)s',
+    format="%(asctime)s | %(levelname)s | %(message)s",
     handlers=[
-        logging.FileHandler('logs/agent.log', encoding='utf-8'),
-        logging.StreamHandler(sys.stdout)
-    ]
+        logging.FileHandler("logs/agent.log", encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
 )
-logger = logging.getLogger('MockClaw')
+logger = logging.getLogger("MockClaw")
 
 
 class ResiliencePatch:
-    """Track and apply self-healing patches."""
-    
-    patches = []
-    
+    """In-memory registry of self-healing patches.
+
+    Patches are accumulated across iterations and flushed to disk via
+    :meth:`save_patches`.
+    """
+
+    patches: list[dict[str, str]] = []
+
     @classmethod
-    def add_patch(cls, error_type: str, fix: str, code: str):
-        """Register a patch for a specific error."""
-        cls.patches.append({
-            'error': error_type,
-            'fix': fix,
-            'code': code,
-            'timestamp': datetime.now().isoformat()
-        })
+    def add_patch(cls, error_type: str, fix: str, code: str) -> None:
+        """Register a new self-healing patch."""
+        cls.patches.append(
+            {
+                "error": error_type,
+                "fix": fix,
+                "code": code,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
         logger.info(f"Patch registered: {fix}")
-        
+
     @classmethod
-    def save_patches(cls, path: str = 'logs/patches.json'):
-        """Save patches to file."""
-        import json
-        with open(path, 'w', encoding='utf-8') as f:
+    def save_patches(cls, path: str = "logs/patches.json") -> None:
+        """Persist registered patches to a JSON file."""
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f:
             json.dump(cls.patches, f, indent=2)
-        logger.info(f"Saved {len(cls.patches)} patches to {path}")
 
 
-def retry(max_retries: int = 3, delay: float = 1.0, backoff: float = 2.0):
-    """
-    Retry decorator with exponential backoff.
-    
+def retry(
+    max_retries: int = 3, delay: float = 1.0, backoff: float = 2.0
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Decorator that retries a function with exponential backoff.
+
     Args:
-        max_retries: Maximum retry attempts
-        delay: Initial delay between retries
-        backoff: Multiplier for delay after each retry
+        max_retries: Maximum retry attempts (default 3).
+        delay: Initial delay in seconds (default 1.0).
+        backoff: Multiplier for delay after each attempt (default 2.0).
     """
-    def decorator(func: Callable) -> Callable:
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(func)
-        def wrapper(*args, **kwargs) -> Any:
-            last_exception = None
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            last_exception: Exception | None = None
             current_delay = delay
-            
             for attempt in range(max_retries + 1):
                 try:
                     return func(*args, **kwargs)
@@ -73,131 +82,127 @@ def retry(max_retries: int = 3, delay: float = 1.0, backoff: float = 2.0):
                     if attempt < max_retries:
                         logger.warning(
                             f"Attempt {attempt + 1}/{max_retries + 1} failed: {e}. "
-                            f"Retrying in {current_delay:.1f}s..."
+                            f"Retry in {current_delay:.1f}s"
                         )
                         time.sleep(current_delay)
                         current_delay *= backoff
                     else:
-                        logger.error(f"All retries exhausted for {func.__name__}")
-                        
-                        # Register patch for this error
                         ResiliencePatch.add_patch(
                             error_type=type(e).__name__,
-                            fix=f"Increase retries or add specific handling for {type(e).__name__}",
-                            code=f"# TODO: Handle {type(e).__name__} gracefully"
+                            fix=f"Add retry for {type(e).__name__}",
+                            code=f"# TODO: Handle {type(e).__name__}",
                         )
                         raise
-            raise last_exception
+            raise last_exception  # unreachable, calms type checker
+
         return wrapper
+
     return decorator
 
 
-def graceful_exit(reason: str, exit_code: int = 1):
-    """
-    Graceful exit with patch logging.
-    
-    Args:
-        reason: Why we're exiting
-        exit_code: Exit code (non-zero triggers respawn)
-    """
+def graceful_exit(reason: str, exit_code: int = 1) -> None:
+    """Shut down the agent gracefully, persisting diagnostic data."""
     logger.error(f"FATAL: {reason}")
-    logger.info("Writing patch for next respawn...")
-    
     ResiliencePatch.save_patches()
-    
-    # Log heartbeat
-    with open('logs/heartbeat.log', 'a', encoding='utf-8') as f:
+    with open("logs/heartbeat.log", "a", encoding="utf-8") as f:
         f.write(f"[{datetime.now().isoformat()}] | EXIT | Reason: {reason}\n")
-    
-    logger.info("Exiting for respawn...")
     sys.exit(exit_code)
 
 
 class Watchdog:
-    """
-    Watchdog timer to detect hung processes.
-    Use to prevent zombie states.
-    """
-    
-    def __init__(self, timeout_seconds: int = 600):
-        """
-        Initialize watchdog.
-        
-        Args:
-            timeout_seconds: Max time without heartbeat before force exit
-        """
-        self.timeout = timeout_seconds
+    """Timer-based hang detector for long-running agent iterations."""
+
+    def __init__(self, timeout_seconds: int = 600) -> None:
+        self.timeout: int = timeout_seconds
+        self.last_heartbeat: float = time.time()
+
+    def heartbeat(self) -> None:
+        """Record a heartbeat — resets the elapsed timer."""
         self.last_heartbeat = time.time()
-        
-    def heartbeat(self):
-        """Update heartbeat timestamp."""
-        self.last_heartbeat = time.time()
-        
-    def check(self):
-        """Check if process is hung."""
+
+    def check(self) -> bool:
+        """Check whether the elapsed time is within limits.
+
+        Returns:
+            ``True`` if healthy, ``False`` if hung (triggers :func:`os._exit`).
+        """
         elapsed = time.time() - self.last_heartbeat
         if elapsed > self.timeout:
             logger.error(f"Watchdog: No heartbeat for {elapsed:.0f}s. Force exit.")
-            os._exit(1)  # Force exit, let wrapper respawn
+            os._exit(1)
         return elapsed < self.timeout
 
 
 class ChaosInjector:
-    """
-    Inject chaos for testing resilience.
-    Use only in test mode!
-    """
-    
+    """Inject chaos for testing resilience. Use only in test mode!"""
+
     @staticmethod
-    def kill_docker():
+    def kill_docker() -> None:
         """Kill Docker containers randomly."""
         import subprocess
+
         try:
-            containers = subprocess.run(
-                ['docker', 'ps', '-q'],
-                capture_output=True, text=True, timeout=5
+            result = subprocess.run(
+                ["docker", "ps", "-q"],
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
-            if containers.stdout.strip():
-                container = containers.stdout.strip().split('\n')[0]
-                subprocess.run(['docker', 'stop', container], timeout=10)
-                logger.warning(f"Chaos: Killed container {container[:12]}")
+            containers = result.stdout.strip().splitlines()
+            if containers:
+                container = containers[0]
+                subprocess.run(
+                    ["docker", "stop", container], timeout=10
+                )
+                logger.warning(
+                    f"Chaos: Killed container {container[:12]}"
+                )
         except Exception as e:
             logger.error(f"Chaos injection failed: {e}")
-    
+
     @staticmethod
-    def fill_disk(percent: float = 0.99):
+    def fill_disk(percent: float = 0.99) -> None:
         """Fill disk to simulate full disk."""
+        import shutil
+
         try:
-            import shutil
-            total, used, free = shutil.disk_usage('/')
+            total, used, _ = shutil.disk_usage("/")
             target_size = int(total * percent) - used
             if target_size > 0:
-                # Create a large file
-                with open('logs/temp/junk.bin', 'wb') as f:
-                    f.write(b'\x00' * min(target_size, 100 * 1024 * 1024))  # Max 100MB
-                logger.warning(f"Chaos: Filled disk to {percent*100:.0f}%")
+                junk = Path("logs/temp/junk.bin")
+                junk.parent.mkdir(parents=True, exist_ok=True)
+                with open(junk, "wb") as f:
+                    f.write(b"\x00" * min(target_size, 100 * 1024 * 1024))
+                logger.warning(
+                    f"Chaos: Filled disk to {percent * 100:.0f}%"
+                )
+                junk.unlink(missing_ok=True)
         except Exception as e:
             logger.error(f"Disk fill failed: {e}")
-    
+
     @staticmethod
-    def random_sleep(max_seconds: int = 30):
+    def random_sleep(max_seconds: int = 30) -> None:
         """Random sleep to simulate slow operations."""
         import random
+
         delay = random.randint(1, max_seconds)
         logger.warning(f"Chaos: Sleeping for {delay}s")
         time.sleep(delay)
 
 
-# Signal handler for graceful shutdown
-def setup_signal_handlers():
-    """Setup signal handlers for graceful shutdown."""
-    def handler(signum, frame):
-        logger.info(f"Received signal {signum}. Graceful exit...")
-        graceful_exit("Signal received", 0)
-    
-    signal.signal(signal.SIGTERM, handler)
-    signal.signal(signal.SIGINT, handler)
+# --------------------------------------------------------------------------
 
 
-# Initialize on import
+def _signal_handler(signum: int, _frame: Any) -> None:
+    """Graceful shutdown handler for SIGTERM / SIGINT."""
+    logger.info(f"Received signal {signum}. Graceful exit...")
+    graceful_exit("Signal received", 0)
+
+
+def setup_signal_handlers() -> None:
+    """Register signal handlers for graceful shutdown."""
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+
+
 setup_signal_handlers()

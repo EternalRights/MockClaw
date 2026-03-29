@@ -138,7 +138,7 @@ class HARParser:
             if post_data.get('mimeType') == 'application/json':
                 try:
                     body = post_data.get('text', '')
-                except:
+                except Exception:
                     body = str(post_data)
         
         return HTTPRequest(
@@ -209,7 +209,12 @@ class HARParser:
         return self.api_endpoints
     
     def export_as_dict(self) -> dict:
-        """Export parsed data as dictionary for LLM consumption."""
+        """Export parsed data as dictionary for LLM consumption.
+
+        For each endpoint, exports the first request and ALL observed responses
+        (not just the first one), so the generator can produce routes with
+        conditional branches for different scenarios.
+        """
         endpoints = self.get_endpoints()
         return {
             "total_endpoints": len(endpoints),
@@ -221,17 +226,29 @@ class HARParser:
                         "url": ep.requests[0].url if ep.requests else "",
                         "headers": ep.requests[0].headers if ep.requests else {},
                         "body": ep.requests[0].body if ep.requests else None,
-                        "query_params": ep.requests[0].query_params if ep.requests else {}
+                        "query_params": ep.requests[0].query_params if ep.requests else {},
                     },
+                    # Export ALL responses so the generator can handle multiple
+                    # scenarios (e.g. 200 OK and 400 Bad Request for the same URL).
+                    "sample_responses": [
+                        {
+                            "status": r.status,
+                            "headers": r.headers,
+                            "body": r.body,
+                            "content_type": r.content_type,
+                        }
+                        for r in ep.responses
+                    ],
+                    # Keep first response as default for backward compat.
                     "sample_response": {
                         "status": ep.responses[0].status if ep.responses else 200,
                         "headers": ep.responses[0].headers if ep.responses else {},
                         "body": ep.responses[0].body if ep.responses else None,
-                        "content_type": ep.responses[0].content_type if ep.responses else None
-                    }
+                        "content_type": ep.responses[0].content_type if ep.responses else None,
+                    },
                 }
                 for ep in endpoints
-            ]
+            ],
         }
 
 

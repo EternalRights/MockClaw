@@ -12,7 +12,6 @@ import time
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from functools import lru_cache
 import logging
 
 # Fix Windows console encoding
@@ -23,7 +22,6 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, validator
-import psutil
 
 # Configure logging
 logging.basicConfig(
@@ -35,8 +33,7 @@ logger = logging.getLogger(__name__)
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from core.parser import HARParser
-from core.generator import MockGenerator
+from core.parser import HARParser  # noqa: E402
 
 # Application metadata
 APP_VERSION = "0.1.0"
@@ -266,9 +263,9 @@ async def parse_har_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=413, detail="File too large (max 50MB)")
     
     try:
-        har_data = json.loads(content.decode('utf-8'))
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
+        json.loads(content.decode("utf-8"))  # validate JSON structure
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid file: {e}")
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="File must be UTF-8 encoded")
     

@@ -257,7 +257,7 @@ def test_generation_performance():
     # Create test endpoint
     test_endpoint = {
         "id": "test_ep",
-        "path": "/api/test/{id}",
+        "resource_path": "/api/test/{id}",
         "method": "POST",
         "sample_request": {"body": json.dumps({"test": "data"})},
         "sample_response": {"body": json.dumps({"result": "ok"})}

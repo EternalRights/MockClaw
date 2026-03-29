@@ -3,15 +3,13 @@ MockClaw Agent Mode
 Infinite self-improvement loop.
 """
 
-import os
 import sys
-import json
 import time
 import shutil
 import subprocess
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 
 # Fix Windows encoding
 if sys.platform == 'win32':
@@ -160,7 +158,7 @@ class ImmortalAgent:
                     if r.status_code == 200:
                         logger.info("Services healthy!")
                         return True
-                except:
+                except Exception:
                     time.sleep(2)
             
             logger.error("Services failed to start")
@@ -266,7 +264,7 @@ class ImmortalAgent:
                 capture_output=True, text=True, timeout=60
             )
             if "error:" in result.stdout:
-                logger.warning(f"Type errors found (non-blocking)")
+                logger.warning("Type errors found (non-blocking)")
         except FileNotFoundError:
             logger.warning("Mypy not installed, skipping type checking")
         except Exception as e:
