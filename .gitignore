@@ -71,3 +71,23 @@ htmlcov/
 captures/
 mocks/
 *.har
+
+# Generated code
+generated_mocks/
+final_mocks/
+quick_test_mocks/
+my_mocks/
+my_traffic.har
+temp_upload.har
+test_security/
+
+# Logs and benchmarks
+logs/*.json
+logs/*.log
+logs/*.txt
+logs/*.md
+!logs/.gitkeep
+test_data/
+
+# IDE and editor files
+*.iml

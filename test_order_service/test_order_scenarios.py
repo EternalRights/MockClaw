@@ -11,13 +11,14 @@ from pathlib import Path
 # Configure pytest-asyncio mode
 pytestmark = pytest.mark.asyncio(scope="function")
 
-# Add the mocks directory to the path so we can import the generated app
-sys.path.insert(0, str(Path(__file__).parent / "mocks"))
+# Add the mocks_v2 directory to the path so we can import the generated app (CLI smart fallback mode)
+sys.path.insert(0, str(Path(__file__).parent / "mocks_v2"))
 
 # Import the generated mock app
 try:
     from dynamic_api import app
     MOCKS_AVAILABLE = True
+    print("✅ Using Smart Fallback mocks (CLI generated)")
 except ImportError as e:
     MOCKS_AVAILABLE = False
     print(f"Warning: Could not import generated mocks: {e}")
@@ -96,13 +97,7 @@ async def test_valid_coupon_returns_200(mock_client):
     """
     Test that valid coupon returns 200 OK.
     
-    NOTE: This test FAILS with fallback mocks because the generator
-    uses the FIRST recorded response (expired coupon = 400) as the default.
-    This is a known limitation of non-LLM mock generation.
-    
-    To fix this, you need to:
-    1. Configure LLM_API_KEY for intelligent mock generation
-    2. Or manually edit the generated mock to handle different coupon codes
+    CRITICAL: This test MUST pass with Smart Fallback mode (--no-llm).
     """
     response = await mock_client.post("/checkout", json={
         "user_id": "user123",
@@ -110,13 +105,12 @@ async def test_valid_coupon_returns_200(mock_client):
         "shipping_address": "123 Main St"
     })
     
-    # With fallback mocks, this will return 400 (the first recorded response)
-    # With LLM-generated mocks, this should return 200
-    if response.status_code == 400:
-        pytest.skip("Fallback mocks always return first recorded response (400)")
-    else:
-        assert response.status_code == 200, f"Expected 200 but got {response.status_code}"
-        print(f"✓ Valid coupon accepted with status {response.status_code}")
+    # Smart fallback should route based on coupon_code
+    assert response.status_code == 200, f"Expected 200 but got {response.status_code}"
+    data = response.json()
+    assert data.get("status") == "confirmed", f"Expected confirmed order, got {data}"
+    print(f"✓ Valid coupon accepted with status {response.status_code}")
+    print(f"  Order ID: {data.get('order_id')}")
 
 
 @pytest.mark.asyncio

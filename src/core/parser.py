@@ -235,16 +235,21 @@ class HARParser:
                         "body": ep.requests[0].body if ep.requests else None,
                         "query_params": ep.requests[0].query_params if ep.requests else {},
                     },
-                    # Export ALL responses so the generator can handle multiple
-                    # scenarios (e.g. 200 OK and 400 Bad Request for the same URL).
+                    # Export ALL responses with their corresponding requests
+                    # so the generator can handle multiple scenarios (e.g. 200 OK and 400 Bad Request).
+                    # Each response includes the request that triggered it for smart routing.
                     "sample_responses": [
                         {
                             "status": r.status,
                             "headers": r.headers,
                             "body": r.body,
                             "content_type": r.content_type,
+                            # Include request body for smart fallback routing
+                            "request": {
+                                "body": ep.requests[i].body if i < len(ep.requests) and ep.requests[i].body else None,
+                            } if ep.requests else None,
                         }
-                        for r in ep.responses
+                        for i, r in enumerate(ep.responses)
                     ],
                     # Keep first response as default for backward compat.
                     "sample_response": {

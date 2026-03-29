@@ -5,6 +5,7 @@ Uses LLM to generate FastAPI mock endpoints from parsed HAR data.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -15,7 +16,6 @@ try:
     import orjson
     HAS_ORJSON = True
 except ImportError:
-    import json
     orjson = None
     HAS_ORJSON = False
 
@@ -91,12 +91,27 @@ def _route_from_responses(
     path: str,
     all_responses: list[dict[str, Any]],
     func_name: str,
+    use_smart_fallback: bool = False,
 ) -> str:
     """Build a complete FastAPI route string for one endpoint.
 
     When multiple responses exist, the first (default) response is used at
     runtime and the docstring lists all observed HAR scenarios for reference.
+    
+    If use_smart_fallback is True, generates conditional routing based on
+    request body fields (e.g., coupon codes).
     """
+    # Check if we have POST/PUT data to enable smart routing
+    has_request_body = any(
+        resp.get("request", {}).get("body") 
+        for resp in all_responses
+    )
+    
+    # For POST/PUT requests with body, use smart routing if enabled
+    if use_smart_fallback and has_request_body and method in ["POST", "PUT"]:
+        return _generate_smart_route(method, path, all_responses, func_name)
+    
+    # Default behavior: use first response
     sc0 = all_responses[0].get("status", 200)
     body0 = _body_literal(all_responses[0].get("body") or "")
 
@@ -127,6 +142,112 @@ def _route_from_responses(
         f'{_FB}"""Mock endpoint -- HAR status {sc0}."""\n'
         f"{body_code}\n"
     )
+
+
+def _generate_smart_route(
+    method: str,
+    path: str,
+    all_responses: list[dict[str, Any]],
+    func_name: str,
+) -> str:
+    """Generate route with conditional logic based on request body.
+    
+    Analyzes HAR entries to find distinguishing fields (like 'coupon')
+    and generates if/elif chains to route to appropriate responses.
+    """
+    # Collect unique request bodies and their responses
+    # Use dict to deduplicate by (field, value) key - first occurrence wins
+    request_patterns_dict: dict[tuple[str, Any], dict[str, Any]] = {}
+    
+    for resp in all_responses:
+        req_body = resp.get("request", {}).get("body", "")
+        resp_status = resp.get("status", 200)
+        resp_body = resp.get("body", "")
+        
+        if req_body:
+            try:
+                req_data = json.loads(req_body) if isinstance(req_body, str) else req_body
+                resp_data = json.loads(resp_body) if isinstance(resp_body, str) else resp_body
+                
+                # Look for key distinguishing fields
+                for field in ["coupon", "coupon_code", "status", "type", "action"]:
+                    if field in req_data:
+                        field_value = req_data[field]
+                        key = (field, field_value)
+                        
+                        # Only add if we haven't seen this (field, value) combination
+                        # This prevents duplicate IF conditions
+                        if key not in request_patterns_dict:
+                            request_patterns_dict[key] = {
+                                "field": field,
+                                "value": field_value,
+                                "status": resp_status,
+                                "response": resp_data,
+                                "request": req_data,
+                            }
+                        break
+            except (json.JSONDecodeError, TypeError):
+                continue
+    
+    # Convert back to list, preserving order of first occurrence
+    request_patterns = list(request_patterns_dict.values())
+    
+    # If we found patterns, generate conditional routing
+    if request_patterns:
+        lines = [
+            f'@app.{method.lower()}("{path}")',
+            f"async def {func_name}(request: Request):",
+            f'{_FB}"""Smart mock endpoint with conditional routing."""',
+            f'{_FB}body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {{}}',
+            "",
+        ]
+        
+        # Group by field for cleaner if/elif chains
+        field_groups = {}
+        for pattern in request_patterns:
+            field = pattern["field"]
+            if field not in field_groups:
+                field_groups[field] = []
+            field_groups[field].append(pattern)
+        
+        # Generate if/elif for the first field (most common)
+        primary_field = list(field_groups.keys())[0]
+        patterns_for_field = field_groups[primary_field]
+        
+        for i, pattern in enumerate(patterns_for_field):
+            if i == 0:
+                lines.append(f'{_FB}if body.get("{pattern["field"]}") == {json.dumps(pattern["value"])}:')
+            else:
+                lines.append(f'{_FB}elif body.get("{pattern["field"]}") == {json.dumps(pattern["value"])}:')
+            
+            # Add response logic
+            if 400 <= pattern["status"] < 600:
+                exc = _STATUS_EXC.get(pattern["status"], "HTTP_500_INTERNAL_SERVER_ERROR")
+                resp_literal = _body_literal(json.dumps(pattern["response"]))
+                lines.append(f'{_FB}    raise HTTPException(status_code=status.{exc}, detail={resp_literal})')
+            else:
+                resp_literal = _body_literal(json.dumps(pattern["response"]))
+                lines.append(f'{_FB}    return {resp_literal}')
+        
+        # Add fallback (default response - prefer SUCCESS over ERROR)
+        # Find first 2xx response, otherwise use first response
+        default_response = next(
+            (resp for resp in all_responses if 200 <= resp.get("status", 200) < 300),
+            all_responses[0]
+        )
+        default_resp = default_response.get("body", "{}")
+        default_status = default_response.get("status", 200)
+        lines.append(f'{_FB}else:')
+        if 400 <= default_status < 600:
+            exc = _STATUS_EXC.get(default_status, "HTTP_500_INTERNAL_SERVER_ERROR")
+            lines.append(f'{_FB}    raise HTTPException(status_code=status.{exc}, detail={_body_literal(default_resp)})')
+        else:
+            lines.append(f'{_FB}    return {_body_literal(default_resp)}')
+        
+        return "\n".join(lines) + "\n"
+    
+    # No patterns found, fall back to simple routing
+    return _route_from_responses(method, path, all_responses, func_name, use_smart_fallback=False)
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +304,8 @@ class MockGenerator:
       endpoint schemas to the model for realistic mock implementations.
     - **Fallback (template)** -- when no LLM is configured, generates stub
       endpoints directly from the HAR response data.
+    - **Smart Fallback** -- when use_smart_fallback=True, analyzes request bodies
+      to generate conditional routing logic (e.g., different responses for different coupon codes).
 
     Args:
         api_key: Optional API key. Falls back to LLM_API_KEY then
@@ -194,13 +317,17 @@ class MockGenerator:
     _BUILTIN_PATHS = {"/health", "/mockclaw/info"}
 
     def __init__(
-        self, api_key: str | None = None, model: str | None = None
+        self, 
+        api_key: str | None = None, 
+        model: str | None = None,
+        use_smart_fallback: bool = False,
     ) -> None:
         self.api_key = api_key or os.getenv("LLM_API_KEY") or os.getenv(
             "OPENAI_API_KEY"
         )
         self.model = model or os.getenv("MODEL_NAME", "gpt-4o-mini")
         self._base_url = os.getenv("LLM_BASE_URL")
+        self.use_smart_fallback = use_smart_fallback
         self.client: Any = None
 
         if OPENAI_AVAILABLE and self.api_key:
@@ -259,10 +386,26 @@ class MockGenerator:
     def _generate_fallback_code(self, endpoint_data: dict[str, Any]) -> str:
         method = endpoint_data["method"]
         path = endpoint_data["resource_path"]
+        sample_request = endpoint_data.get("sample_request", {})
         all_responses: list[dict[str, Any]] = endpoint_data.get(
             "sample_responses",
             [endpoint_data.get("sample_response", {})],
         )
+        
+        # Only attach sample_request body if responses don't already have their own request bodies
+        # (Parser now exports request body per-response for smart routing)
+        has_individual_requests = any(
+            resp.get("request") and resp["request"].get("body")
+            for resp in all_responses
+        )
+        
+        if not has_individual_requests:
+            # Fallback: use sample_request for all responses (old behavior)
+            request_body = sample_request.get("body")
+            if request_body:
+                for resp in all_responses:
+                    resp["request"] = {"body": request_body}
+        
         func_name = "_".join(
             filter(
                 None,
@@ -274,7 +417,13 @@ class MockGenerator:
                 ],
             )
         )
-        return _route_from_responses(method, path, all_responses, func_name)
+        return _route_from_responses(
+            method, 
+            path, 
+            all_responses, 
+            func_name,
+            use_smart_fallback=self.use_smart_fallback,
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -308,7 +457,21 @@ class MockGenerator:
         self,
         endpoints: list[dict[str, Any]],
         output_dir: str = "generated_mocks",
+        use_smart_fallback: bool | None = None,
     ) -> list[GenerationResult]:
+        """Generate all mock endpoints.
+        
+        Args:
+            endpoints: List of endpoint data from HAR parser
+            output_dir: Directory to write generated code
+            use_smart_fallback: Override instance setting for smart routing
+        """
+        # Allow per-call override of smart_fallback setting
+        if use_smart_fallback is not None:
+            old_setting = self.use_smart_fallback
+            self.use_smart_fallback = use_smart_fallback
+        else:
+            old_setting = None
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
@@ -324,6 +487,7 @@ class MockGenerator:
             "from starlette.middleware.base import BaseHTTPMiddleware",
             "import re",
             "import time",
+            "import json",
             "from collections import defaultdict",
             "",
             "app = FastAPI(title='MockClaw Generated API')",
@@ -396,6 +560,11 @@ class MockGenerator:
         (output_path / "dynamic_api.py").write_text(
             "\n".join(header), encoding="utf-8"
         )
+
+        # Restore original setting if we overrode it
+        if old_setting is not None:
+            self.use_smart_fallback = old_setting
+
         return results
 
 

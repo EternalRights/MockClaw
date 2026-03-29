@@ -1,8 +1,0 @@
-{
-  "all_passed": true,
-  "results": {
-    "expired_coupon": true,
-    "faker_data": true,
-    "health_endpoints": true
-  }
-}
