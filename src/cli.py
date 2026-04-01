@@ -6,16 +6,22 @@ Record, generate, and serve mock APIs from HAR files.
 import sys
 import subprocess
 import uvicorn
+import shutil
 from pathlib import Path
 from typing import Optional
+from enum import Enum
 
 import typer
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.table import Table
 
-# Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
 from core.parser import HARParser
 from core.generator import MockGenerator
+
+console = Console()
 
 app = typer.Typer(
     name="mockclaw",
@@ -23,8 +29,11 @@ app = typer.Typer(
     add_completion=False,
     epilog="""
 Examples:
+  # Quick start with sample HAR
+  $ mockclaw example
+
   # Generate mock server from HAR file (no LLM required)
-  $ mockclaw generate tests/gauntlet/flow.har generated_mocks --no-llm
+  $ mockclaw generate examples/sample.har generated_mocks --smart-fallback
 
   # Start mock server on custom port
   $ mockclaw serve generated_mocks --port 8080
@@ -35,15 +44,121 @@ Examples:
   # Run chaos tests against mock server
   $ mockclaw test generated_mocks
 
-  # Full workflow (5 minutes)
-  $ mockclaw record -o traffic.har
-  $ mockclaw generate traffic.har --no-llm
-  $ mockclaw serve
-  $ mockclaw test
-
 Documentation: https://github.com/EternalRights/MockClaw/docs
     """,
 )
+
+
+def version_callback(value: bool):
+    if value:
+        console.print("[bold cyan]MockClaw[/bold cyan] version [bold]0.2.0[/bold]")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-v",
+        callback=version_callback,
+        is_eager=True,
+        help="Show version and exit",
+    ),
+):
+    """
+    MockClaw - Turn production traffic into testable mock servers in under 2 minutes.
+    """
+    pass
+
+
+@app.command()
+def example(
+    output_dir: str = typer.Option(
+        "example_mocks",
+        "--output",
+        "-o",
+        help="Output directory for generated mocks",
+    ),
+    port: int = typer.Option(
+        8000,
+        "--port",
+        "-p",
+        help="Port for the mock server",
+    ),
+):
+    """
+    Quick start: Generate and serve a sample mock server.
+    
+    This command creates a complete example from the sample HAR file,
+    generates the mock server, and starts it for immediate testing.
+    
+    Perfect for first-time users to see MockClaw in action!
+    """
+    console.print("\n[bold cyan]🚀 MockClaw Quick Start[/bold cyan]\n")
+    
+    sample_har = Path(__file__).parent.parent / "examples" / "sample.har"
+    
+    if not sample_har.exists():
+        console.print("[red]❌ Sample HAR file not found![/red]")
+        console.print("\n[yellow]Creating sample HAR file...[/yellow]")
+        
+        examples_dir = Path(__file__).parent.parent / "examples"
+        examples_dir.mkdir(exist_ok=True)
+        
+        test_har = Path(__file__).parent.parent / "tests" / "gauntlet" / "flow.har"
+        if test_har.exists():
+            shutil.copy(test_har, sample_har)
+            console.print("[green]✅ Sample HAR file created[/green]")
+        else:
+            console.print("[red]❌ No sample HAR file available[/red]")
+            console.print("\n[yellow]Please run the following commands first:[/yellow]")
+            console.print("  1. python tests/gauntlet/dummy_shop.py &")
+            console.print("  2. python scripts/gauntlet_recorder.py")
+            raise typer.Exit(1)
+    
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task1 = progress.add_task("[cyan]Parsing HAR file...", total=None)
+        
+        try:
+            parser = HARParser(str(sample_har))
+            endpoints_data = parser.export_as_dict()
+            num_endpoints = len(endpoints_data.get("endpoints", []))
+            progress.update(task1, description=f"[green]✅ Found {num_endpoints} endpoints[/green]")
+        except Exception as e:
+            console.print(f"[red]❌ Failed to parse HAR file: {e}[/red]")
+            raise typer.Exit(1)
+        
+        task2 = progress.add_task("[cyan]Generating mock server...", total=None)
+        
+        try:
+            generator = MockGenerator(use_smart_fallback=True)
+            results = generator.generate_all(
+                endpoints_data["endpoints"],
+                output_dir,
+                use_smart_fallback=True,
+            )
+            success_count = sum(1 for r in results if r.success)
+            progress.update(task2, description=f"[green]✅ Generated {success_count}/{len(results)} endpoints[/green]")
+        except Exception as e:
+            console.print(f"[red]❌ Failed to generate mocks: {e}[/red]")
+            raise typer.Exit(1)
+    
+    console.print(f"\n[bold green]✅ Mock server ready![/bold green]")
+    console.print(f"\n[bold]Next steps:[/bold]")
+    console.print(f"  1. Start the server: [cyan]mockclaw serve {output_dir} --port {port}[/cyan]")
+    console.print(f"  2. Open API docs: [cyan]http://localhost:{port}/docs[/cyan]")
+    console.print(f"  3. Test health: [cyan]curl http://localhost:{port}/health[/cyan]")
+    
+    console.print(f"\n[bold]Test scenarios:[/bold]")
+    console.print(f"  # Expired coupon (returns 400):")
+    console.print(f'  [dim]curl -X POST http://localhost:{port}/checkout -H "Content-Type: application/json" -d \'{{"user_id":"test","coupon_code":"EXPIRED2026"}}\'[/dim]')
+    console.print(f"\n  # Valid coupon (returns success):")
+    console.print(f'  [dim]curl -X POST http://localhost:{port}/checkout -H "Content-Type: application/json" -d \'{{"user_id":"test","coupon_code":"SAVE10"}}\'[/dim]')
 
 
 @app.command()
@@ -72,28 +187,32 @@ def record(
       $ mockclaw record -o my_session.har
       
       # Full workflow
-      $ mockclaw record && mockclaw generate tests/gauntlet/flow.har --no-llm
+      $ mockclaw record && mockclaw generate tests/gauntlet/flow.har --smart-fallback
     """
-    typer.echo(f"🎙️  Starting recording from {url}...")
+    console.print(f"\n[cyan]🎙️  Starting recording from {url}...[/cyan]\n")
     
-    # Check if Dummy Shop is running
     try:
         import requests
-        resp = requests.get(f"{url}/health", timeout=3)
-        if resp.status_code != 200:
-            typer.echo(f"❌ Dummy Shop returned status {resp.status_code}")
-            raise typer.Exit(1)
-        typer.echo("✅ Dummy Shop is running")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("[cyan]Checking Dummy Shop...", total=None)
+            resp = requests.get(f"{url}/health", timeout=3)
+            if resp.status_code != 200:
+                console.print(f"[red]❌ Dummy Shop returned status {resp.status_code}[/red]")
+                raise typer.Exit(1)
+            progress.update(task, description="[green]✅ Dummy Shop is running[/green]")
     except requests.exceptions.ConnectionError:
-        typer.echo("❌ Cannot connect to Dummy Shop!")
-        typer.echo(f"\nPlease start Dummy Shop first:")
-        typer.echo(f"  python tests/gauntlet/dummy_shop.py")
+        console.print("[red]❌ Cannot connect to Dummy Shop![/red]")
+        console.print("\n[yellow]Please start Dummy Shop first:[/yellow]")
+        console.print("  [cyan]python tests/gauntlet/dummy_shop.py[/cyan]")
         raise typer.Exit(1)
     
-    # Run recorder
     recorder_script = Path(__file__).parent.parent / "scripts" / "gauntlet_recorder.py"
     if not recorder_script.exists():
-        typer.echo("❌ Gauntlet recorder script not found")
+        console.print("[red]❌ Gauntlet recorder script not found[/red]")
         raise typer.Exit(1)
     
     try:
@@ -105,13 +224,13 @@ def record(
         )
         
         if result.returncode == 0:
-            typer.echo(f"\n✅ Recording complete: {output}")
+            console.print(f"\n[green]✅ Recording complete: {output}[/green]")
         else:
-            typer.echo(f"\n❌ Recording failed with code {result.returncode}")
+            console.print(f"\n[red]❌ Recording failed with code {result.returncode}[/red]")
             raise typer.Exit(1)
             
     except subprocess.TimeoutExpired:
-        typer.echo("\n❌ Recording timed out")
+        console.print("\n[red]❌ Recording timed out[/red]")
         raise typer.Exit(1)
 
 
@@ -119,7 +238,7 @@ def record(
 def generate(
     har_file: str = typer.Argument(
         ...,
-        help="Path to HAR file",
+        help="Path to HAR file (or use 'examples/sample.har' for quick start)",
     ),
     output_dir: str = typer.Argument(
         "generated_mocks",
@@ -145,6 +264,9 @@ def generate(
     Use --no-llm or --smart-fallback for rule-based routing without API keys.
     
     Examples:
+      # Generate from sample HAR (recommended for first-time users)
+      $ mockclaw generate examples/sample.har ./my_mocks --smart-fallback
+      
       # Generate without LLM (recommended for testing)
       $ mockclaw generate tests/gauntlet/flow.har --no-llm
       
@@ -156,51 +278,73 @@ def generate(
     """
     har_path = Path(har_file)
     if not har_path.exists():
-        typer.echo(f"❌ HAR file not found: {har_file}")
+        console.print(f"[red]❌ HAR file not found: {har_file}[/red]")
+        console.print("\n[yellow]Suggestions:[/yellow]")
+        
+        sample_har = Path(__file__).parent.parent / "examples" / "sample.har"
+        if sample_har.exists():
+            console.print(f"  • Use sample HAR: [cyan]mockclaw generate examples/sample.har {output_dir} --smart-fallback[/cyan]")
+        else:
+            console.print(f"  • Generate sample: [cyan]mockclaw example[/cyan]")
+        
+        console.print(f"  • Record your own: [cyan]mockclaw record[/cyan]")
         raise typer.Exit(1)
     
-    typer.echo(f"📦 Parsing HAR file: {har_file}")
+    console.print(f"\n[cyan]📦 Parsing HAR file: {har_file}[/cyan]")
     
     try:
-        # Parse HAR
-        parser = HARParser(str(har_path))
-        endpoints_data = parser.export_as_dict()
-        num_endpoints = len(endpoints_data.get("endpoints", []))
-        typer.echo(f"✅ Found {num_endpoints} endpoints")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task1 = progress.add_task("[cyan]Parsing HAR file...", total=None)
+            
+            parser = HARParser(str(har_path))
+            endpoints_data = parser.export_as_dict()
+            num_endpoints = len(endpoints_data.get("endpoints", []))
+            
+            progress.update(task1, description=f"[green]✅ Found {num_endpoints} endpoints[/green]")
+            
+            task2 = progress.add_task("[cyan]Generating mocks...", total=None)
+            
+            if no_llm or smart_fallback:
+                mode = "Smart Fallback (rule-based routing)"
+                generator = MockGenerator(use_smart_fallback=True)
+            else:
+                mode = "LLM-assisted (if API key configured)"
+                generator = MockGenerator()
+            
+            console.print(f"\n[dim]   Mode: {mode}[/dim]")
+            
+            results = generator.generate_all(
+                endpoints_data["endpoints"],
+                output_dir,
+                use_smart_fallback=no_llm or smart_fallback,
+            )
+            
+            success_count = sum(1 for r in results if r.success)
+            progress.update(task2, description=f"[green]✅ Generated {success_count}/{len(results)} endpoints[/green]")
+            
+            if success_count < len(results):
+                console.print("\n[yellow]⚠️  Some endpoints failed:[/yellow]")
+                for r in results:
+                    if not r.success:
+                        console.print(f"   [red]• {r.endpoint_path}: {r.error}[/red]")
         
-        # Generate mocks
-        typer.echo(f"🤖 Generating mocks...")
-        if no_llm or smart_fallback:
-            typer.echo("   Mode: Smart Fallback (rule-based routing)")
-            generator = MockGenerator(use_smart_fallback=True)
-        else:
-            typer.echo("   Mode: LLM-assisted (if API key configured)")
-            generator = MockGenerator()
+        console.print(f"\n[bold green]✅ Mock server generated successfully![/bold green]")
+        console.print(f"\n[bold]Output:[bold]")
+        console.print(f"  📂 Directory: [cyan]{Path(output_dir).absolute()}[/cyan]")
+        console.print(f"  📄 Main file: [cyan]{Path(output_dir) / 'dynamic_api.py'}[/cyan]")
         
-        results = generator.generate_all(
-            endpoints_data["endpoints"],
-            output_dir,
-            use_smart_fallback=no_llm or smart_fallback,
-        )
-        
-        # Report results
-        success_count = sum(1 for r in results if r.success)
-        typer.echo(f"\n✅ Generated {success_count}/{len(results)} endpoints")
-        
-        if success_count < len(results):
-            typer.echo("\n⚠️  Some endpoints failed:")
-            for r in results:
-                if not r.success:
-                    typer.echo(f"   - {r.endpoint_path}: {r.error}")
-        
-        typer.echo(f"\n📂 Output directory: {Path(output_dir).absolute()}")
-        typer.echo(f"   Main file: {Path(output_dir) / 'dynamic_api.py'}")
+        console.print(f"\n[bold]Next steps:[/bold]")
+        console.print(f"  1. Start server: [cyan]mockclaw serve {output_dir}[/cyan]")
+        console.print(f"  2. View API docs: [cyan]http://localhost:8000/docs[/cyan]")
         
     except Exception as e:
-        typer.echo(f"❌ Generation failed: {e}")
-        if typer.Option("verbose", "-v", "--verbose", default=False):
-            import traceback
-            traceback.print_exc()
+        console.print(f"[red]❌ Generation failed: {e}[/red]")
+        import traceback
+        traceback.print_exc()
         raise typer.Exit(1)
 
 
@@ -218,11 +362,13 @@ def serve(
     port: int = typer.Option(
         8000,
         "--port",
+        "-p",
         help="Port to listen on",
     ),
     reload: bool = typer.Option(
         False,
         "--reload",
+        "-r",
         help="Enable auto-reload (development mode)",
     ),
 ):
@@ -243,52 +389,54 @@ def serve(
       $ mockclaw serve --host 0.0.0.0 --port 80
       
       # Quick start after generation
-      $ mockclaw generate flow.har --no-llm && mockclaw serve
+      $ mockclaw generate flow.har --smart-fallback && mockclaw serve
     """
     mock_path = Path(mock_dir) / "dynamic_api.py"
     if not mock_path.exists():
-        typer.echo(f"❌ Mock file not found: {mock_path}")
-        typer.echo(f"\nPlease generate mocks first:")
-        typer.echo(f"  mockclaw generate tests/gauntlet/flow.har")
+        console.print(f"[red]❌ Mock file not found: {mock_path}[/red]")
+        console.print("\n[yellow]Please generate mocks first:[/yellow]")
+        console.print(f"  [cyan]mockclaw generate examples/sample.har {mock_dir} --smart-fallback[/cyan]")
         raise typer.Exit(1)
     
-    # Convert to module path (handle relative paths correctly)
     mock_path_obj = Path(mock_dir)
     if mock_path_obj.is_absolute():
-        # For absolute paths, use the last parts
         module_path = f"{mock_path_obj.parts[-1]}.dynamic_api:app"
     else:
-        # For relative paths, just clean up the separators
         clean_path = str(mock_path_obj).replace('\\', '.').replace('/', '.')
         module_path = f"{clean_path}.dynamic_api:app"
     
-    typer.echo(f"🚀 Starting mock server...")
-    typer.echo(f"   Module: {module_path}")
-    typer.echo(f"   Host: {host}:{port}")
-    typer.echo(f"   Reload: {reload}")
+    console.print(f"\n[bold cyan]🚀 Starting mock server...[/bold cyan]")
     
-    # Check if port is available
+    table = Table(show_header=False, box=None)
+    table.add_column("key", style="bold")
+    table.add_column("value", style="cyan")
+    table.add_row("Module", module_path)
+    table.add_row("Host", f"{host}:{port}")
+    table.add_row("Reload", str(reload))
+    console.print(table)
+    
     import socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.bind((host, port))
         sock.close()
     except OSError:
-        typer.echo(f"\n❌ Port {port} is already in use!")
-        typer.echo(f"\nSolutions:")
-        typer.echo(f"  1. Use a different port: mockclaw serve {mock_dir} --port 8001")
-        typer.echo(f"  2. Find and stop the process using port {port}:")
+        console.print(f"\n[red]❌ Port {port} is already in use![/red]")
+        console.print("\n[yellow]Solutions:[/yellow]")
+        console.print(f"  1. Use a different port: [cyan]mockclaw serve {mock_dir} --port 8001[/cyan]")
+        console.print(f"  2. Find and stop the process using port {port}:")
         if sys.platform == 'win32':
-            typer.echo(f"     netstat -ano | findstr :{port}")
-            typer.echo(f"     taskkill /PID <PID> /F")
+            console.print(f"     [dim]netstat -ano | findstr :{port}[/dim]")
+            console.print(f"     [dim]taskkill /PID <PID> /F[/dim]")
         else:
-            typer.echo(f"     lsof -i :{port}")
-            typer.echo(f"     kill -9 <PID>")
+            console.print(f"     [dim]lsof -i :{port}[/dim]")
+            console.print(f"     [dim]kill -9 <PID>[/dim]")
         raise typer.Exit(1)
     
-    typer.echo(f"\n📖 API docs: http://{host.replace('0.0.0.0', 'localhost')}:{port}/docs")
-    typer.echo(f"   Health: http://{host.replace('0.0.0.0', 'localhost')}:{port}/health")
-    typer.echo(f"\nPress Ctrl+C to stop\n")
+    console.print(f"\n[bold]Endpoints:[/bold]")
+    console.print(f"  📖 API docs: [cyan]http://{host.replace('0.0.0.0', 'localhost')}:{port}/docs[/cyan]")
+    console.print(f"  ❤️  Health: [cyan]http://{host.replace('0.0.0.0', 'localhost')}:{port}/health[/cyan]")
+    console.print(f"\n[dim]Press Ctrl+C to stop[/dim]\n")
     
     try:
         uvicorn.run(
@@ -299,16 +447,16 @@ def serve(
             log_level="info",
         )
     except KeyboardInterrupt:
-        typer.echo("\n👋 Server stopped")
+        console.print("\n[yellow]👋 Server stopped[/yellow]")
     except Exception as e:
         error_msg = str(e)
         if "Address already in use" in error_msg or "Only one usage of each socket address" in error_msg:
-            typer.echo(f"\n❌ Port {port} is already in use!")
-            typer.echo(f"\nSolutions:")
-            typer.echo(f"  1. Use a different port: mockclaw serve {mock_dir} --port 8001")
-            typer.echo(f"  2. Stop the existing server and try again")
+            console.print(f"\n[red]❌ Port {port} is already in use![/red]")
+            console.print("\n[yellow]Solutions:[/yellow]")
+            console.print(f"  1. Use a different port: [cyan]mockclaw serve {mock_dir} --port 8001[/cyan]")
+            console.print(f"  2. Stop the existing server and try again")
         else:
-            typer.echo(f"❌ Server error: {e}")
+            console.print(f"[red]❌ Server error: {e}[/red]")
         raise typer.Exit(1)
 
 
@@ -338,9 +486,9 @@ def test(
       $ mockclaw test --hardcore
       
       # Quick validation after generation
-      $ mockclaw generate flow.har --no-llm && mockclaw test
+      $ mockclaw generate flow.har --smart-fallback && mockclaw test
     """
-    typer.echo(f"🥋 Running chaos tests...")
+    console.print(f"\n[cyan]🥋 Running chaos tests...[/cyan]\n")
     
     if hardcore:
         test_script = Path(__file__).parent.parent / "scripts" / "hardcore_chaos_test.py"
@@ -348,7 +496,7 @@ def test(
         test_script = Path(__file__).parent.parent / "scripts" / "enhanced_chaos_test.py"
     
     if not test_script.exists():
-        typer.echo(f"❌ Test script not found: {test_script}")
+        console.print(f"[red]❌ Test script not found: {test_script}[/red]")
         raise typer.Exit(1)
     
     try:
@@ -360,20 +508,63 @@ def test(
         )
         
         if result.returncode == 0:
-            typer.echo(f"\n✅ All chaos tests passed!")
+            console.print(f"\n[green]✅ All chaos tests passed![/green]")
         else:
-            typer.echo(f"\n❌ Chaos tests failed with code {result.returncode}")
+            console.print(f"\n[red]❌ Chaos tests failed with code {result.returncode}[/red]")
             raise typer.Exit(1)
             
     except subprocess.TimeoutExpired:
-        typer.echo("\n❌ Chaos tests timed out")
+        console.print("\n[red]❌ Chaos tests timed out[/red]")
         raise typer.Exit(1)
 
 
-def main():
-    """CLI entry point."""
-    app()
+@app.command()
+def info():
+    """
+    Show system information and configuration.
+    
+    Displays Python version, installed packages, and environment details
+    useful for debugging and troubleshooting.
+    """
+    console.print("\n[bold cyan]MockClaw System Information[/bold cyan]\n")
+    
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Component", style="bold")
+    table.add_column("Version/Info", style="green")
+    
+    table.add_row("MockClaw", "0.2.0")
+    table.add_row("Python", f"{sys.version}")
+    table.add_row("Platform", sys.platform)
+    table.add_row("Working Directory", str(Path.cwd()))
+    
+    try:
+        import fastapi
+        table.add_row("FastAPI", fastapi.__version__)
+    except ImportError:
+        table.add_row("FastAPI", "[red]Not installed[/red]")
+    
+    try:
+        import uvicorn
+        table.add_row("Uvicorn", uvicorn.__version__)
+    except ImportError:
+        table.add_row("Uvicorn", "[red]Not installed[/red]")
+    
+    try:
+        import typer
+        table.add_row("Typer", typer.__version__)
+    except ImportError:
+        table.add_row("Typer", "[red]Not installed[/red]")
+    
+    console.print(table)
+    
+    console.print("\n[bold]Environment Variables:[/bold]")
+    import os
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if openai_key:
+        console.print(f"  OPENAI_API_KEY: [green]{'*' * 8}{openai_key[-4:]}[/green]")
+    else:
+        console.print(f"  OPENAI_API_KEY: [yellow]Not set (optional)[/yellow]")
 
 
 if __name__ == "__main__":
-    main()
+    app()
