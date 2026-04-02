@@ -16,6 +16,12 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+if sys.version_info < (3, 11):
+    print("Error: MockClaw requires Python 3.11 or higher")
+    print(f"Current version: {sys.version}")
+    print("\nPlease upgrade Python and try again.")
+    sys.exit(1)
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 from core.parser import HARParser
@@ -216,21 +222,30 @@ def record(
         raise typer.Exit(1)
     
     try:
-        result = subprocess.run(
-            [sys.executable, str(recorder_script)],
-            cwd=Path.cwd(),
-            capture_output=False,
-            timeout=120,
-        )
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("gauntlet_recorder", recorder_script)
+        recorder_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(recorder_module)
         
-        if result.returncode == 0:
-            console.print(f"\n[green]✅ Recording complete: {output}[/green]")
-        else:
-            console.print(f"\n[red]❌ Recording failed with code {result.returncode}[/red]")
-            raise typer.Exit(1)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("[cyan]Recording user session...", total=None)
             
-    except subprocess.TimeoutExpired:
-        console.print("\n[red]❌ Recording timed out[/red]")
+            recorder = recorder_module.GauntletRecorder(url)
+            recorder.run_user_session()
+            har_path = recorder.export_har(output)
+            
+            progress.update(task, description="[green]✅ Recording complete[/green]")
+        
+        console.print(f"\n[green]✅ HAR file saved: {har_path}[/green]")
+        
+    except Exception as e:
+        console.print(f"\n[red]❌ Recording failed: {e}[/red]")
+        import traceback
+        traceback.print_exc()
         raise typer.Exit(1)
 
 
