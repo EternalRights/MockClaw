@@ -25,6 +25,35 @@ Stop writing 500-line JSON mock configs by hand. Stop waiting for backend teams 
 
 ## 60-Second Quick Start
 
+### ⚡ Super Quick Install (Recommended)
+
+**Linux/Mac:**
+```bash
+./install.sh
+```
+
+**Windows:**
+```bash
+install.bat
+```
+
+This will:
+-  Check Python version (requires 3.11+)
+-  Create virtual environment
+-  Install all dependencies
+-  Install MockClaw CLI
+
+**After installation:**
+```bash
+# Activate environment
+source venv/bin/activate  # Linux/Mac
+# or
+venv\Scripts\activate.bat  # Windows
+
+# Try it out!
+mockclaw example
+```
+
 ### Option 1: Web UI (Recommended for First-Time Users)
 
 ```bash

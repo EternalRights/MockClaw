@@ -44,7 +44,7 @@ setup(
     install_requires=requirements,
     entry_points={
         "console_scripts": [
-            "mockclaw=cli:main",
+            "mockclaw=cli:app",
         ],
     },
     include_package_data=True,
