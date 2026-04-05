@@ -6,7 +6,6 @@ on:
   pull_request:
     branches: [ main ]
   schedule:
-    # Run nightly at 2 AM UTC
     - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
@@ -17,7 +16,8 @@ on:
 
 env:
   PYTHON_VERSION: '3.11'
-  DOCKER_ENABLED: 'false'  # Will be set to true if Docker available
+  DOCKER_ENABLED: 'false'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   chaos-tests:
@@ -26,9 +26,7 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-    
+      
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -54,9 +52,8 @@ jobs:
     - name: Generate mocks from HAR
       run: |
         echo "Generating mocks from HAR file..."
-        python regenerate_mocks.py
+        python -m src.cli generate tests/gauntlet/flow.har generated_mocks --smart-fallback
         
-        # Verify generated files
         if [ ! -f "generated_mocks/dynamic_api.py" ]; then
           echo "❌ Mock generation failed!"
           exit 1
@@ -113,6 +110,7 @@ jobs:
           logs/*.json
           logs/*.log
         retention-days: 7
+        if-no-files-found: warn
     
     - name: Generate test report
       if: always()
