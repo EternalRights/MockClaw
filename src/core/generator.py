@@ -55,6 +55,14 @@ class GenerationResult:
         endpoint_path: str,
         error: str | None = None,
     ) -> None:
+        """Initialize generation result.
+
+        Args:
+            success: Whether the generation was successful.
+            generated_code: The generated FastAPI code (empty if failed).
+            endpoint_path: The API endpoint path.
+            error: Error message if generation failed, None otherwise.
+        """
         self.success = success
         self.generated_code = generated_code
         self.endpoint_path = endpoint_path
@@ -322,6 +330,16 @@ class MockGenerator:
         model: str | None = None,
         use_smart_fallback: bool = False,
     ) -> None:
+        """Initialize the MockGenerator.
+
+        Args:
+            api_key: Optional API key for LLM. Falls back to LLM_API_KEY
+                then OPENAI_API_KEY environment variables.
+            model: Model identifier for LLM. Defaults to gpt-4o-mini or
+                MODEL_NAME environment variable.
+            use_smart_fallback: Enable smart routing based on request body
+                analysis (e.g., different responses for different coupon codes).
+        """
         self.api_key = api_key or os.getenv("LLM_API_KEY") or os.getenv(
             "OPENAI_API_KEY"
         )
@@ -338,6 +356,15 @@ class MockGenerator:
     # ------------------------------------------------------------------
 
     def _build_prompt(self, endpoint_data: dict[str, Any]) -> str:
+        """Build the LLM prompt for endpoint generation.
+
+        Args:
+            endpoint_data: Dictionary containing endpoint information including
+                method, path, sample request, and sample response.
+
+        Returns:
+            Formatted prompt string for the LLM.
+        """
         req = endpoint_data.get("sample_request", {})
         resp = endpoint_data.get("sample_response", {})
         return (
@@ -354,6 +381,14 @@ class MockGenerator:
 
     @staticmethod
     def _extract_code_block(response: str) -> str:
+        """Extract Python code from LLM response.
+
+        Args:
+            response: Raw LLM response text.
+
+        Returns:
+            Extracted Python code, or original response if no code block found.
+        """
         if match := re.search(r"```python\n(.*?)```", response, re.DOTALL):
             return match.group(1).strip()
         if match := re.search(r"```\n?(.*?)```", response, re.DOTALL):
@@ -361,6 +396,15 @@ class MockGenerator:
         return response.strip()
 
     def _generate_with_llm(self, endpoint_data: dict[str, Any]) -> str:
+        """Generate mock endpoint code using LLM.
+
+        Args:
+            endpoint_data: Dictionary containing endpoint information.
+
+        Returns:
+            Generated FastAPI code. Falls back to template generation if
+            LLM is unavailable or fails.
+        """
         if not self.client:
             return self._generate_fallback_code(endpoint_data)
         try:
@@ -384,6 +428,18 @@ class MockGenerator:
     # ------------------------------------------------------------------
 
     def _generate_fallback_code(self, endpoint_data: dict[str, Any]) -> str:
+        """Generate mock endpoint code using template fallback.
+
+        Creates a simple FastAPI route that returns the HAR response data
+        directly, optionally with smart routing based on request body.
+
+        Args:
+            endpoint_data: Dictionary containing endpoint information including
+                method, path, sample request, and all observed responses.
+
+        Returns:
+            Generated FastAPI route code.
+        """
         method = endpoint_data["method"]
         path = endpoint_data["resource_path"]
         sample_request = endpoint_data.get("sample_request", {})
@@ -432,6 +488,16 @@ class MockGenerator:
     def generate_endpoint(
         self, endpoint_data: dict[str, Any]
     ) -> GenerationResult:
+        """Generate a single mock endpoint.
+
+        Args:
+            endpoint_data: Dictionary containing endpoint information including
+                method, resource_path, sample_request, and sample_response(s).
+
+        Returns:
+            GenerationResult containing success status, generated code,
+            endpoint path, and any error message.
+        """
         try:
             code = self._generate_with_llm(endpoint_data)
             if "from fastapi import" not in code:
@@ -497,7 +563,7 @@ class MockGenerator:
             "class PathTraversalMiddleware(BaseHTTPMiddleware):",
             "    async def dispatch(self, request: Request, call_next):",
             "        path = request.url.path",
-            r"        dangerous = [r'\.\.', r'%2e%2e', r'%252e', r'%2f%5c\.\.', r'//']",
+            r"        dangerous = [r'\.\.', r'%2e%2e', r'%252e', r'%2f%5c\.\.', '//']",
             "        for pattern in dangerous:",
             "            if re.search(pattern, path, re.IGNORECASE):",
             "                return JSONResponse(status_code=400, content={'error': 'Invalid path', 'code': 'PATH_TRAVERSAL_BLOCKED'})",

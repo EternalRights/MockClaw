@@ -13,6 +13,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Health check endpoint with service status monitoring
 - Auto-recovery watchdog for process monitoring
 
+### Changed
+
+- **Open Source Preparation (2026-03-29)**
+  - Fixed SyntaxWarning in generated code (path traversal patterns)
+  - Removed unused imports from CLI module
+  - Enhanced .gitignore with additional sensitive file patterns
+  - All public functions now have complete docstrings
+  - Code style unified across all Python files
+
+### Security
+
+- Added `*.key`, `secrets.json`, `credentials.json` to .gitignore
+- Verified no hardcoded API keys or secrets in codebase
+- Confirmed all dependencies are up-to-date and secure
+
 ## [0.2.0] - 2026-03-29
 
 ### Added

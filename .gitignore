@@ -59,6 +59,9 @@ Thumbs.db
 .env.local
 .env.*.local
 *.env
+*.key
+secrets.json
+credentials.json
 
 # Testing
 .pytest_cache/

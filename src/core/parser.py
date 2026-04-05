@@ -68,6 +68,11 @@ class HARParser:
     """Parser for HAR (HTTP Archive) format files."""
     
     def __init__(self, har_file_path: str):
+        """Initialize the HAR parser.
+
+        Args:
+            har_file_path: Path to the HAR file to parse.
+        """
         self.har_file_path = Path(har_file_path)
         self.entries: list[dict] = []
         self.api_endpoints: list[APIEndpoint] = []

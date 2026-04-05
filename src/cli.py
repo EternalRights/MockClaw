@@ -8,8 +8,6 @@ import subprocess
 import uvicorn
 import shutil
 from pathlib import Path
-from typing import Optional
-from enum import Enum
 
 import typer
 from rich.console import Console
