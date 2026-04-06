@@ -43,14 +43,14 @@
 
 ## Phase 5: 验证与测试
 
-- [ ] Task 8: 本地验证工作流语法
-  - [ ] SubTask 8.1: 使用 actionlint 或类似工具验证 YAML 语法
-  - [ ] SubTask 8.2: 检查所有路径引用
+- [x] Task 8: 本地验证工作流语法
+  - [x] SubTask 8.1: 使用 actionlint 或类似工具验证 YAML 语法
+  - [x] SubTask 8.2: 检查所有路径引用
 
-- [ ] Task 9: 提交并触发 CI
-  - [ ] SubTask 9.1: 提交所有更改
-  - [ ] SubTask 9.2: 推送到 GitHub
-  - [ ] SubTask 9.3: 验证 GitHub Actions 运行成功
+- [x] Task 9: 提交并触发 CI
+  - [x] SubTask 9.1: 提交所有更改
+  - [x] SubTask 9.2: 推送到 GitHub
+  - [x] SubTask 9.3: 验证 GitHub Actions 运行成功
 
 # Task Dependencies
 - [Task 3] depends on [Task 1] - 修复引用前先更新版本

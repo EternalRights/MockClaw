@@ -4,6 +4,7 @@ Record, generate, and serve mock APIs from HAR files.
 """
 
 import sys
+import socket
 import subprocess
 import uvicorn
 import shutil
@@ -428,23 +429,25 @@ def serve(
     table.add_row("Reload", str(reload))
     console.print(table)
     
-    import socket
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        sock.bind((host, port))
-        sock.close()
-    except OSError:
-        console.print(f"\n[red]❌ Port {port} is already in use![/red]")
-        console.print("\n[yellow]Solutions:[/yellow]")
-        console.print(f"  1. Use a different port: [cyan]mockclaw serve {mock_dir} --port 8001[/cyan]")
-        console.print(f"  2. Find and stop the process using port {port}:")
-        if sys.platform == 'win32':
-            console.print(f"     [dim]netstat -ano | findstr :{port}[/dim]")
-            console.print(f"     [dim]taskkill /PID <PID> /F[/dim]")
-        else:
-            console.print(f"     [dim]lsof -i :{port}[/dim]")
-            console.print(f"     [dim]kill -9 <PID>[/dim]")
-        raise typer.Exit(1)
+        test_sock.settimeout(1.0)
+        result = test_sock.connect_ex((host.replace('0.0.0.0', '127.0.0.1'), port))
+        test_sock.close()
+        if result == 0:
+            console.print(f"\n[red]❌ Port {port} is already in use![/red]")
+            console.print("\n[yellow]Solutions:[/yellow]")
+            console.print(f"  1. Use a different port: [cyan]mockclaw serve {mock_dir} --port 8001[/cyan]")
+            console.print(f"  2. Find and stop the process using port {port}:")
+            if sys.platform == 'win32':
+                console.print(f"     [dim]netstat -ano | findstr :{port}[/dim]")
+                console.print(f"     [dim]taskkill /PID <PID> /F[/dim]")
+            else:
+                console.print(f"     [dim]lsof -i :{port}[/dim]")
+                console.print(f"     [dim]kill -9 <PID>[/dim]")
+            raise typer.Exit(1)
+    except Exception:
+        test_sock.close()
     
     console.print(f"\n[bold]Endpoints:[/bold]")
     console.print(f"  📖 API docs: [cyan]http://{host.replace('0.0.0.0', 'localhost')}:{port}/docs[/cyan]")

@@ -1,10 +1,10 @@
-- [ ] chaos.yml 使用支持 Node.js 24 的 actions 版本
-- [ ] order_service_test.yml 使用支持 Node.js 24 的 actions 版本
-- [ ] chaos.yml 无 Node.js 20 弃用警告
-- [ ] order_service_test.yml 无 Node.js 20 弃用警告
-- [ ] chaos.yml 正确生成 mocks（使用 src.cli）
-- [ ] chaos.yml artifacts 上传不因文件缺失而失败
-- [ ] order_service_test.yml artifacts 上传不因文件缺失而失败
-- [ ] 所有工作流设置了 FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true
-- [ ] GitHub Actions 工作流运行成功（绿色状态）
-- [ ] 无 "Process completed with exit code 1" 错误
+- [x] chaos.yml 使用支持 Node.js 24 的 actions 版本
+- [x] order_service_test.yml 使用支持 Node.js 24 的 actions 版本
+- [x] chaos.yml 无 Node.js 20 弃用警告
+- [x] order_service_test.yml 无 Node.js 20 弃用警告
+- [x] chaos.yml 正确生成 mocks（使用 src.cli）
+- [x] chaos.yml artifacts 上传不因文件缺失而失败
+- [x] order_service_test.yml artifacts 上传不因文件缺失而失败
+- [x] 所有工作流设置了 FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true
+- [x] GitHub Actions 工作流运行成功（绿色状态）
+- [x] 无 "Process completed with exit code 1" 错误
