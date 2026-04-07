@@ -73,7 +73,10 @@ htmlcov/
 # Mock data
 captures/
 mocks/
+# Ignore HAR files except sample data
 *.har
+!tests/gauntlet/flow.har
+!sample_data/flow.har
 
 # Generated code
 generated_mocks/

@@ -1,0 +1,7 @@
+- [ ] tests/gauntlet/flow.har 文件存在且格式正确
+- [ ] HAR 文件包含至少一个有效的 HTTP 条目
+- [ ] chaos.yml 在测试前创建 logs 目录
+- [ ] chaos.yml 提供清晰的错误信息
+- [ ] 本地验证 HAR 文件可被解析
+- [ ] GitHub Actions 工作流运行成功（忽略 Node.js 警告）
+- [ ] Artifacts 上传成功（至少有一个日志文件）

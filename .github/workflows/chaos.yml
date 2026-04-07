@@ -39,10 +39,14 @@ jobs:
         pip install -r src/requirements.txt
         pip install pytest pytest-asyncio requests
     
+    - name: Create logs directory
+      run: mkdir -p logs
+    
     - name: Verify HAR file
       run: |
         if [ ! -f "tests/gauntlet/flow.har" ]; then
-          echo "❌ HAR file not found!"
+          echo "❌ HAR file not found at tests/gauntlet/flow.har"
+          echo "💡 Solution: Record traffic with 'mockclaw record' or use sample data"
           exit 1
         fi
         echo "✅ HAR file found"
