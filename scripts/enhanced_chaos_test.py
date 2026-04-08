@@ -412,16 +412,26 @@ class EnhancedChaosBreaker:
 async def main():
     """Main entry point."""
     breaker = EnhancedChaosBreaker()
-    results = await breaker.run_all_chaos_tests()
     
-    # Save results
-    results_path = Path("logs/chaos_results.json")
-    results_path.parent.mkdir(parents=True, exist_ok=True)
-    results_path.write_text(json.dumps(results, indent=2), encoding='utf-8')
+    results = {"status": "aborted", "total_tests": 0, "failures": 0, "results": {}}
     
-    print(f"\nResults saved to: {results_path}")
+    try:
+        results = await breaker.run_all_chaos_tests()
+    except Exception as e:
+        print(f"Chaos test error: {e}")
+        results = {
+            "status": "error",
+            "total_tests": 0,
+            "failures": 1,
+            "error": str(e),
+            "results": {}
+        }
+    finally:
+        results_path = Path("logs/chaos_results.json")
+        results_path.parent.mkdir(parents=True, exist_ok=True)
+        results_path.write_text(json.dumps(results, indent=2), encoding='utf-8')
+        print(f"\nResults saved to: {results_path}")
     
-    # Return exit code based on results
     return 0 if results.get("failures", 0) == 0 else 1
 
 

@@ -1,0 +1,6 @@
+- [ ] chaos.yml 工作流步骤简化且可靠
+- [ ] pytest 只运行不需要服务器的测试
+- [ ] mock 生成步骤正确执行
+- [ ] chaos 测试生成 logs/chaos_results.json
+- [ ] artifacts 上传成功（至少有一个日志文件）
+- [ ] GitHub Actions 工作流运行成功（绿色状态）
