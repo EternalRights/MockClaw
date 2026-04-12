@@ -2,9 +2,8 @@
 MockClaw Test Configuration
 """
 
-import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import pytest
 
@@ -14,50 +13,75 @@ GAUNTLET_DIR = Path(__file__).parent / "gauntlet"
 
 
 @pytest.fixture
-def sample_har_path() -> Path:
-    har_path = GAUNTLET_DIR / "flow.har"
-    if not har_path.exists():
-        pytest.skip(f"HAR file not found at {har_path}")
-    return har_path
-
-
-@pytest.fixture
-def temp_output_dir(tmp_path: Path) -> Path:
-    output_dir = tmp_path / "generated_mocks"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    return output_dir
-
-
-@pytest.fixture
-def no_llm_env(monkeypatch):
-    monkeypatch.setenv("LLM_PROVIDER", "none")
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
-    return monkeypatch
-
-
-@pytest.fixture
-def checkout_request_body() -> Dict[str, Any]:
+def minimal_har_data() -> dict[str, Any]:
     return {
-        "user_id": "user123",
-        "coupon_code": "EXPIRED2026",
-        "shipping_address": "123 Main St"
-    }
-
-
-@pytest.fixture
-def valid_checkout_body() -> Dict[str, Any]:
-    return {
-        "user_id": "user123",
-        "coupon_code": "SAVE10",
-        "shipping_address": "123 Main St"
-    }
-
-
-@pytest.fixture
-def no_coupon_body() -> Dict[str, Any]:
-    return {
-        "user_id": "user123",
-        "shipping_address": "123 Main St"
+        "log": {
+            "version": "1.2",
+            "creator": {"name": "MockClaw Test", "version": "0.1.0"},
+            "entries": [
+                {
+                    "startedDateTime": "2026-03-28T10:00:00.000Z",
+                    "time": 150,
+                    "request": {
+                        "method": "POST",
+                        "url": "https://api.example.com/api/login",
+                        "httpVersion": "HTTP/1.1",
+                        "headers": [{"name": "Content-Type", "value": "application/json"}],
+                        "queryString": [],
+                        "postData": {
+                            "mimeType": "application/json",
+                            "text": '{"username":"testuser","password":"secret123"}'
+                        },
+                        "headersSize": -1,
+                        "bodySize": 45
+                    },
+                    "response": {
+                        "status": 200,
+                        "statusText": "OK",
+                        "httpVersion": "HTTP/1.1",
+                        "headers": [{"name": "Content-Type", "value": "application/json"}],
+                        "content": {
+                            "mimeType": "application/json",
+                            "text": '{"token":"mock_jwt_token","user":{"id":1,"username":"testuser","email":"test@example.com"}}'
+                        },
+                        "redirectURL": "",
+                        "headersSize": -1,
+                        "bodySize": 150
+                    },
+                    "cache": {},
+                    "timings": {"send": 0, "wait": 100, "receive": 10}
+                },
+                {
+                    "startedDateTime": "2026-03-28T10:00:01.000Z",
+                    "time": 80,
+                    "request": {
+                        "method": "GET",
+                        "url": "https://api.example.com/api/users/456?status=error",
+                        "httpVersion": "HTTP/1.1",
+                        "headers": [{"name": "Authorization", "value": "Bearer mock_token"}],
+                        "queryString": [{"name": "status", "value": "error"}],
+                        "postData": None,
+                        "headersSize": -1,
+                        "bodySize": 0
+                    },
+                    "response": {
+                        "status": 500,
+                        "statusText": "Internal Server Error",
+                        "httpVersion": "HTTP/1.1",
+                        "headers": [{"name": "Content-Type", "value": "application/json"}],
+                        "content": {
+                            "mimeType": "application/json",
+                            "text": '{"error":"Database connection failed","code":"ERR_DB_CONNECTION"}'
+                        },
+                        "redirectURL": "",
+                        "headersSize": -1,
+                        "bodySize": 80
+                    },
+                    "cache": {},
+                    "timings": {"send": 0, "wait": 60, "receive": 10}
+                }
+            ]
+        }
     }
 
 

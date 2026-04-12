@@ -10,7 +10,6 @@ import sys
 import subprocess
 import signal
 from pathlib import Path
-from typing import Dict, Any
 from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -19,47 +18,42 @@ from core.parser import HARParser
 from core.generator import MockGenerator
 
 
-def _create_minimal_har() -> dict:
-    return {
-        "log": {
-            "version": "1.2",
-            "creator": {"name": "Chaos Test", "version": "0.1.0"},
-            "entries": [
-                {
-                    "startedDateTime": "2026-03-28T10:00:00.000Z",
-                    "time": 150,
-                    "request": {
-                        "method": "POST",
-                        "url": "https://api.example.com/api/login",
-                        "httpVersion": "HTTP/1.1",
-                        "headers": [{"name": "Content-Type", "value": "application/json"}],
-                        "queryString": [],
-                        "postData": {
-                            "mimeType": "application/json",
-                            "text": '{"username":"testuser","password":"secret123"}'
-                        },
-                        "headersSize": -1,
-                        "bodySize": 45
-                    },
-                    "response": {
-                        "status": 200,
-                        "statusText": "OK",
-                        "httpVersion": "HTTP/1.1",
-                        "headers": [{"name": "Content-Type", "value": "application/json"}],
-                        "content": {
-                            "mimeType": "application/json",
-                            "text": '{"token":"mock_jwt_token","user":{"id":1,"username":"testuser"}}'
-                        },
-                        "redirectURL": "",
-                        "headersSize": -1,
-                        "bodySize": 150
-                    },
-                    "cache": {},
-                    "timings": {"send": 0, "wait": 100, "receive": 10}
-                }
-            ]
-        }
+_GAUNTLET_HAR = Path(__file__).parent.parent / "tests" / "gauntlet" / "flow.har"
+
+_MINIMAL_HAR = {
+    "log": {
+        "version": "1.2",
+        "creator": {"name": "Chaos Test", "version": "0.1.0"},
+        "entries": [
+            {
+                "startedDateTime": "2026-03-28T10:00:00.000Z",
+                "time": 150,
+                "request": {
+                    "method": "POST",
+                    "url": "https://api.example.com/api/login",
+                    "httpVersion": "HTTP/1.1",
+                    "headers": [{"name": "Content-Type", "value": "application/json"}],
+                    "queryString": [],
+                    "postData": {"mimeType": "application/json", "text": '{"username":"testuser","password":"secret123"}'},
+                    "headersSize": -1,
+                    "bodySize": 45
+                },
+                "response": {
+                    "status": 200,
+                    "statusText": "OK",
+                    "httpVersion": "HTTP/1.1",
+                    "headers": [{"name": "Content-Type", "value": "application/json"}],
+                    "content": {"mimeType": "application/json", "text": '{"token":"mock_jwt_token","user":{"id":1,"username":"testuser"}}'},
+                    "redirectURL": "",
+                    "headersSize": -1,
+                    "bodySize": 150
+                },
+                "cache": {},
+                "timings": {"send": 0, "wait": 100, "receive": 10}
+            }
+        ]
     }
+}
 
 
 class EnhancedChaosBreaker:
@@ -84,11 +78,14 @@ class EnhancedChaosBreaker:
         if not mock_file.exists():
             self.log("Generated mock file not found. Running generator first...", "WARN")
             try:
-                test_file = Path("test_data/chaos_test.har")
-                test_file.parent.mkdir(exist_ok=True)
-                test_file.write_text(json.dumps(_create_minimal_har()), encoding='utf-8')
+                har_source = str(_GAUNTLET_HAR) if _GAUNTLET_HAR.exists() else None
+                if har_source is None:
+                    test_file = Path("test_data/chaos_test.har")
+                    test_file.parent.mkdir(exist_ok=True)
+                    test_file.write_text(json.dumps(_MINIMAL_HAR), encoding='utf-8')
+                    har_source = str(test_file)
 
-                parser = HARParser(str(test_file))
+                parser = HARParser(har_source)
                 endpoints_data = parser.export_as_dict()
                 generator = MockGenerator()
                 generator.generate_all(endpoints_data['endpoints'], "generated_mocks")

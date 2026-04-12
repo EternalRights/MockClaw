@@ -482,11 +482,6 @@ def test(
         "generated_mocks",
         help="Directory containing generated mocks",
     ),
-    hardcore: bool = typer.Option(
-        False,
-        "--hardcore",
-        help="Run hardcore chaos tests (requires Docker)",
-    ),
 ):
     """
     Run chaos tests against mock server.
@@ -495,24 +490,18 @@ def test(
     path traversal attacks, and rate limiting validation.
     
     Examples:
-      # Run standard chaos tests (no Docker required)
+      # Run chaos tests
       $ mockclaw test generated_mocks
-      
-      # Run hardcore tests with Docker (infrastructure sabotage)
-      $ mockclaw test --hardcore
       
       # Quick validation after generation
       $ mockclaw generate flow.har --smart-fallback && mockclaw test
     """
-    console.print(f"\n[cyan]🥋 Running chaos tests...[/cyan]\n")
+    console.print(f"\n[cyan]Running chaos tests...[/cyan]\n")
     
-    if hardcore:
-        test_script = Path(__file__).parent.parent / "scripts" / "hardcore_chaos_test.py"
-    else:
-        test_script = Path(__file__).parent.parent / "scripts" / "enhanced_chaos_test.py"
+    test_script = Path(__file__).parent.parent / "scripts" / "enhanced_chaos_test.py"
     
     if not test_script.exists():
-        console.print(f"[red]❌ Test script not found: {test_script}[/red]")
+        console.print(f"[red]Test script not found: {test_script}[/red]")
         raise typer.Exit(1)
     
     try:
@@ -524,13 +513,13 @@ def test(
         )
         
         if result.returncode == 0:
-            console.print(f"\n[green]✅ All chaos tests passed![/green]")
+            console.print(f"\n[green]All chaos tests passed![/green]")
         else:
-            console.print(f"\n[red]❌ Chaos tests failed with code {result.returncode}[/red]")
+            console.print(f"\n[red]Chaos tests failed with code {result.returncode}[/red]")
             raise typer.Exit(1)
             
     except subprocess.TimeoutExpired:
-        console.print("\n[red]❌ Chaos tests timed out[/red]")
+        console.print("\n[red]Chaos tests timed out[/red]")
         raise typer.Exit(1)
 
 

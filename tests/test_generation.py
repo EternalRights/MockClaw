@@ -21,99 +21,13 @@ def log(msg):
     print(msg)
 
 
-def create_dummy_har() -> dict:
-    """Create a dummy HAR simulating a login API."""
-    return {
-        "log": {
-            "version": "1.2",
-            "creator": {"name": "MockClaw Test", "version": "0.1.0"},
-            "entries": [
-                {
-                    "startedDateTime": "2026-03-28T10:00:00.000Z",
-                    "time": 150,
-                    "request": {
-                        "method": "POST",
-                        "url": "https://api.example.com/api/login",
-                        "httpVersion": "HTTP/1.1",
-                        "headers": [
-                            {"name": "Content-Type", "value": "application/json"},
-                            {"name": "Accept", "value": "application/json"}
-                        ],
-                        "queryString": [],
-                        "postData": {
-                            "mimeType": "application/json",
-                            "text": '{"username":"testuser","password":"secret123"}'
-                        },
-                        "headersSize": -1,
-                        "bodySize": 45
-                    },
-                    "response": {
-                        "status": 200,
-                        "statusText": "OK",
-                        "httpVersion": "HTTP/1.1",
-                        "headers": [
-                            {"name": "Content-Type", "value": "application/json"}
-                        ],
-                        "content": {
-                            "mimeType": "application/json",
-                            "text": '{"token":"mock_jwt_token","user":{"id":1,"username":"testuser","email":"test@example.com"}}'
-                        },
-                        "redirectURL": "",
-                        "headersSize": -1,
-                        "bodySize": 150
-                    },
-                    "cache": {},
-                    "timings": {"send": 0, "wait": 100, "receive": 10}
-                },
-                {
-                    "startedDateTime": "2026-03-28T10:00:01.000Z",
-                    "time": 80,
-                    "request": {
-                        "method": "GET",
-                        "url": "https://api.example.com/api/users/456?status=error",
-                        "httpVersion": "HTTP/1.1",
-                        "headers": [
-                            {"name": "Authorization", "value": "Bearer mock_token"}
-                        ],
-                        "queryString": [
-                            {"name": "status", "value": "error"}
-                        ],
-                        "postData": None,
-                        "headersSize": -1,
-                        "bodySize": 0
-                    },
-                    "response": {
-                        "status": 500,
-                        "statusText": "Internal Server Error",
-                        "httpVersion": "HTTP/1.1",
-                        "headers": [
-                            {"name": "Content-Type", "value": "application/json"}
-                        ],
-                        "content": {
-                            "mimeType": "application/json",
-                            "text": '{"error":"Database connection failed","code":"ERR_DB_CONNECTION"}'
-                        },
-                        "redirectURL": "",
-                        "headersSize": -1,
-                        "bodySize": 80
-                    },
-                    "cache": {},
-                    "timings": {"send": 0, "wait": 60, "receive": 10}
-                }
-            ]
-        }
-    }
-
-
-def test_har_parser():
+def test_har_parser(minimal_har_data):
     """Test 1: HAR Parser correctly extracts endpoints."""
     log("[TEST 1] HAR Parser")
     
-    # Create dummy HAR file
-    dummy_har = create_dummy_har()
     test_file = Path("test_data/dummy_login.har")
     test_file.parent.mkdir(exist_ok=True)
-    test_file.write_text(json.dumps(dummy_har), encoding='utf-8')
+    test_file.write_text(json.dumps(minimal_har_data), encoding='utf-8')
     
     # Parse
     parser = HARParser(str(test_file))
@@ -130,14 +44,12 @@ def test_har_parser():
     return True
 
 
-def test_generator():
+def test_generator(minimal_har_data):
     """Test 2: Generator creates valid Python code."""
     log("[TEST 2] Mock Generator")
     
-    # Create dummy HAR
-    dummy_har = create_dummy_har()
     test_file = Path("test_data/dummy_login.har")
-    test_file.write_text(json.dumps(dummy_har), encoding='utf-8')
+    test_file.write_text(json.dumps(minimal_har_data), encoding='utf-8')
     
     # Parse and export
     parser = HARParser(str(test_file))

@@ -26,7 +26,6 @@ STATIC_URL_PATTERNS = ['.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.svg',
 # Pre-compiled regex patterns for URL path extraction (performance optimization)
 UUID_PATTERN = re.compile(r'/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.IGNORECASE)
 ID_PATTERN = re.compile(r'/[0-9]+')
-BASE_PATH_PATTERN = re.compile(r'/\{[^}]+\}$')
 
 
 @dataclass
@@ -37,7 +36,6 @@ class HTTPRequest:
     headers: dict
     query_params: dict
     body: Optional[str] = None
-    post_data: Optional[dict] = None
 
 
 @dataclass
@@ -52,8 +50,7 @@ class HTTPResponse:
 @dataclass
 class APIEndpoint:
     """Represents a grouped API endpoint resource."""
-    resource_path: str  # e.g., /api/users/{id}
-    base_path: str      # e.g., /api/users
+    resource_path: str
     method: str
     requests: list[HTTPRequest] = field(default_factory=list)
     responses: list[HTTPResponse] = field(default_factory=list)
@@ -126,13 +123,6 @@ class HARParser:
         """Convert headers list to dictionary."""
         return {h['name'].lower(): h['value'] for h in headers}
     
-    def _parse_query_params(self, query_string: str) -> dict:
-        """Parse query string into dictionary."""
-        if not query_string:
-            return {}
-        return {param['name']: param.get('value', '') 
-                for param in query_string}
-    
     def _parse_request(self, entry: dict) -> HTTPRequest:
         """Parse a HAR entry's request."""
         request = entry.get('request', {})
@@ -144,7 +134,6 @@ class HARParser:
         
         # Parse body
         body = None
-        post_data = None
         if request.get('postData'):
             post_data = request['postData']
             if post_data.get('mimeType') == 'application/json':
@@ -158,8 +147,7 @@ class HARParser:
             method=request.get('method', 'GET'),
             headers=self._parse_headers(request.get('headers', [])),
             query_params=query_dict,
-            body=body,
-            post_data=post_data
+            body=body
         )
     
     def _parse_response(self, entry: dict) -> HTTPResponse:
@@ -200,11 +188,8 @@ class HARParser:
             endpoint_key = f"{request.method}:{resource_path}"
             
             if endpoint_key not in endpoint_groups:
-                # Extract base path (remove trailing /{param}) using pre-compiled regex
-                base_path = BASE_PATH_PATTERN.sub('', resource_path)
                 endpoint_groups[endpoint_key] = APIEndpoint(
                     resource_path=resource_path,
-                    base_path=base_path or resource_path,
                     method=request.method
                 )
             

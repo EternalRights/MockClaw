@@ -55,6 +55,12 @@ setup(
             "ruff>=0.1.0",
             "mypy>=1.8.0",
         ],
+        "llm": [
+            "openai>=1.10.0",
+        ],
+        "perf": [
+            "orjson>=3.9.0",
+        ],
         "docker": [
             "docker>=7.0.0",
         ],

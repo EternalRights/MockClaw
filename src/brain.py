@@ -9,7 +9,8 @@ import json
 import hashlib
 import time
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Any
+from contextlib import asynccontextmanager
 from datetime import datetime
 import logging
 
@@ -35,12 +36,26 @@ from core.generator import MockGenerator
 APP_VERSION = "0.2.0"
 START_TIME = time.time()
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info(f"MockClaw Brain v{APP_VERSION} starting up...")
+    llm_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not llm_key:
+        logger.warning("LLM API key not configured. Mock generation will use smart fallback.")
+    else:
+        logger.info("LLM API key configured")
+    yield
+    logger.info("MockClaw Brain shutting down...")
+
+
 app = FastAPI(
     title="MockClaw Brain",
     description="AI-Powered Mock API Generator Backend",
     version=APP_VERSION,
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -51,16 +66,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-generated_endpoints: Dict[str, Dict[str, Any]] = {}
-generation_logs: List[Dict[str, str]] = []
-endpoint_cache: Dict[str, str] = {}
+generated_endpoints: dict[str, dict[str, Any]] = {}
+generation_logs: list[dict[str, str]] = []
+endpoint_cache: dict[str, str] = {}
 
 
 class HealthResponse(BaseModel):
     status: str = Field(..., description="Service status")
     version: str = Field(..., description="Application version")
     uptime: str = Field(..., description="Service uptime")
-    services: Dict[str, str] = Field(..., description="Service statuses")
+    services: dict[str, str] = Field(..., description="Service statuses")
 
 
 class EndpointInfo(BaseModel):
@@ -69,7 +84,7 @@ class EndpointInfo(BaseModel):
     method: str = Field(..., description="HTTP method")
     status: int = Field(..., description="HTTP status code")
     generated: bool = Field(False, description="Whether mock is generated")
-    hash: Optional[str] = Field(None, description="Content hash for change detection")
+    hash: str | None = Field(None, description="Content hash for change detection")
 
     @validator('method')
     def validate_method(cls, v):
@@ -85,11 +100,11 @@ class GenerateRequest(BaseModel):
 
 class ParseResponse(BaseModel):
     total_endpoints: int = Field(..., description="Number of endpoints found")
-    endpoints: List[EndpointInfo] = Field(..., description="Parsed endpoints")
+    endpoints: list[EndpointInfo] = Field(..., description="Parsed endpoints")
     processing_time_ms: int = Field(..., description="Processing duration")
 
 
-def compute_endpoint_hash(endpoint_data: Dict[str, Any]) -> str:
+def compute_endpoint_hash(endpoint_data: dict[str, Any]) -> str:
     content = json.dumps(endpoint_data, sort_keys=True)
     return hashlib.sha256(content.encode()).hexdigest()[:16]
 
@@ -106,7 +121,7 @@ def get_uptime() -> str:
         return f"{seconds}s"
 
 
-def check_services() -> Dict[str, str]:
+def check_services() -> dict[str, str]:
     services = {
         "backend": "running",
         "docker": "unknown",
@@ -330,21 +345,6 @@ async def generate_all_endpoints():
         "generated_count": successful,
         "total_attempted": len(tasks)
     }
-
-
-@app.on_event("startup")
-async def startup_event():
-    logger.info(f"MockClaw Brain v{APP_VERSION} starting up...")
-    llm_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
-    if not llm_key:
-        logger.warning("LLM API key not configured. Mock generation will use smart fallback.")
-    else:
-        logger.info("LLM API key configured")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("MockClaw Brain shutting down...")
 
 
 if __name__ == "__main__":

@@ -99,14 +99,6 @@ class TestGenerateCommand:
         
         assert result.exit_code in [0, 1]
     
-    def test_generate_with_llm(self):
-        """Test generate with LLM enabled."""
-        # --llm flag requires LLM_API_KEY env var, so this will fail gracefully
-        result = runner.invoke(app, ["generate", "test.har", "./output", "--llm"])
-        
-        # Exit code 2 = CLI argument error (acceptable)
-        assert result.exit_code in [0, 1, 2]
-    
     def test_generate_missing_har(self):
         """Test generate with non-existent HAR file."""
         result = runner.invoke(app, ["generate", "nonexistent.har", "./out"])
@@ -201,37 +193,6 @@ class TestCLIErrorHandling:
         
         # Should show help or require subcommand
         assert result.exit_code in [0, 2]
-
-
-# Fallback tests if CLI doesn't exist yet
-@pytest.mark.skipif(CLI_AVAILABLE, reason="CLI already available, skipping stub tests")
-class TestCLINotAvailable:
-    """
-    Stub tests for when CLI is not yet implemented.
-    These tests document the expected behavior.
-    """
-    
-    def test_cli_module_should_exist(self):
-        """CLI module should be importable."""
-        # This test documents that src/cli.py should exist
-        cli_path = Path(__file__).parent.parent / "src" / "cli.py"
-        assert cli_path.exists(), (
-            "CLI module not found. Create src/cli.py with Typer app.\n"
-            "Expected commands: record, generate, serve"
-        )
-    
-    def test_record_command_should_exist(self):
-        """Record command should be available."""
-        assert CLI_AVAILABLE, "CLI not available - record command not implemented"
-    
-    def test_generate_command_should_handle_no_llm(self):
-        """Generate command should work without LLM."""
-        assert CLI_AVAILABLE, "CLI not available - generate command not implemented"
-    
-    def test_serve_command_should_start_gracefully(self):
-        """Serve command should start server gracefully."""
-        assert CLI_AVAILABLE, "CLI not available - serve command not implemented"
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
