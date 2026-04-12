@@ -14,7 +14,7 @@ MockClaw is an AI-powered tool that automatically generates Mock API servers fro
   ┌──────────────┐     ┌────────────────┐     ┌──────────────────────────┐
   │   Capture    │     │     Brain      │     │       Dashboard         │
   │   Service    │────▶│    Service     │────▶│       (Next.js)          │
-  │  (mitmproxy) │     │   (FastAPI)    │     │       Port 3000          │
+  │  (Recorder)  │     │   (FastAPI)    │     │       Port 3000          │
   └──────────────┘     └────────────────┘     └──────────────────────────┘
          │                     │                        │
          │ HAR files           │ Generated              │ Admin UI
@@ -22,36 +22,51 @@ MockClaw is an AI-powered tool that automatically generates Mock API servers fro
   ┌──────────────┐     ┌────────────────┐     ┌──────────────────────────┐
   │  input_har   │     │ generated_mocks │     │   Mock Server Instance    │
   │    folder    │────▶│                 │────▶│       (FastAPI)           │
-  └──────────────┘     └────────────────┘     │      Port 4000            │
+  └──────────────┘     └────────────────┘     │      Port 8000            │
                                                └──────────────────────────┘
 ```
 
 ## Service Components
 
-### Service A: Capture (Traffic Interceptor)
-- **Technology**: mitmproxy / Playwright
-- **Purpose**: Capture HTTP traffic and export as HAR format
-- **Output**: `.har` files in `input_har/` directory
+### Service A: Capture (Traffic Recorder)
+- **Technology**: Python + requests
+- **Purpose**: Record HTTP traffic from running APIs and export as HAR format
+- **Script**: `scripts/gauntlet_recorder.py`
+- **Output**: `.har` files
 - **Features**:
-  - Proxy-based traffic capture
-  - Browser automation with Playwright
+  - Session-based traffic recording
   - HAR file export
+  - Dummy Shop integration for testing
 
-### Service B: Brain (AI Generator)
-- **Technology**: Python 3.11 + FastAPI
-- **Purpose**: Parse HAR files and generate mock API code using LLM
+### Service B: Brain (AI Generator Backend)
+- **Technology**: Python 3.11+ / FastAPI
+- **Purpose**: Parse HAR files and generate mock API code
+- **Entry**: `src/brain.py`
 - **Components**:
-  - `parser.py`: HAR file parser
-  - `generator.py`: LLM-powered code generator
-  - `main.py`: CLI and file watcher
+  - `core/parser.py`: HAR file parser
+  - `core/generator.py`: LLM-powered and template-based code generator
+  - `core/resilience.py`: Retry, watchdog, and self-healing utilities
 - **Port**: 8000
 - **Features**:
   - LLM integration (OpenAI GPT-4 / local models)
+  - Smart Fallback routing (rule-based, no LLM required)
   - Automatic endpoint grouping
   - Pydantic model generation
   - Faker data generation
 
-### Service C: Dashboard (Admin UI)
+### Service C: CLI (Command Line Interface)
+- **Technology**: Python + Typer
+- **Purpose**: Command-line tool for generate, serve, record, and test
+- **Entry**: `src/cli.py`
+- **Commands**:
+  - `mockclaw generate` - Generate mock server from HAR file
+  - `mockclaw serve` - Start mock API server
+  - `mockclaw record` - Record traffic from running API
+  - `mockclaw test` - Run chaos tests against mock server
+  - `mockclaw example` - Quick start with sample data
+  - `mockclaw info` - Show system information
+
+### Service D: Dashboard (Admin UI)
 - **Technology**: Next.js 14 + React
 - **Purpose**: Web interface for managing mocks
 - **Port**: 3000
@@ -61,149 +76,83 @@ MockClaw is an AI-powered tool that automatically generates Mock API servers fro
   - Configure mock behavior
   - Test mock responses
 
-### Service D: Mock Server
-- **Technology**: Node.js + Express / Python + FastAPI
-- **Purpose**: Run the generated mock API
-- **Port**: 4000
-- **Features**:
-  - Dynamic endpoint registration
-  - Response customization
-  - Error simulation
-
 ## Data Flow
 
 ```
 1. User captures traffic → HAR file
        │
        ▼
-2. HAR file dropped in input_har/
+2. Parser extracts endpoints
        │
        ▼
-3. Parser extracts endpoints
+3. Generator creates FastAPI code (LLM or template fallback)
        │
        ▼
-4. LLM generates FastAPI code
+4. Mock server deploys with auto-injected middleware
        │
        ▼
-5. Mock server deploys
-       │
-       ▼
-6. Developers use mock in testing
+5. Developers use mock in testing
 ```
-
-## Design Decisions
-
-### 1. HAR as Intermediate Format
-- **Why**: Industry standard, widely supported
-- **Benefits**: 
-  - Can capture from any HTTP client
-  - Easy to debug and inspect
-  - Self-contained JSON
-
-### 2. FastAPI for Generated Code
-- **Why**: Modern, type-safe, auto-documentation
-- **Benefits**:
-  - Automatic OpenAPI/Swagger docs
-  - Pydantic validation
-  - Async support
-
-### 3. Faker for Mock Data
-- **Why**: Generates realistic, localized data
-- **Benefits**:
-  - 80+ data providers
-  - Multiple locales
-  - Consistent across runs
-
-### 4. Docker Compose for Deployment
-- **Why**: Consistent environment, easy scaling
-- **Benefits**:
-  - Self-contained
-  - Network isolation
-  - Easy orchestration
 
 ## Directory Structure
 
 ```
 /MockClaw
-├── docker/                    # Docker configurations
-│   └── Dockerfile
 ├── src/                       # Python Backend
 │   ├── core/                  # Core modules
 │   │   ├── parser.py          # HAR parser
-│   │   └── generator.py       # LLM generator
-│   ├── capture/               # Traffic capture
-│   └── main.py                # CLI entry point
+│   │   ├── generator.py       # LLM + template generator
+│   │   └── resilience.py      # Retry, watchdog, self-healing
+│   ├── brain.py               # FastAPI backend for dashboard
+│   └── cli.py                 # CLI entry point (Typer)
+├── scripts/                   # Utility scripts
+│   ├── enhanced_chaos_test.py # Adversarial testing
+│   └── gauntlet_recorder.py   # Traffic recorder
 ├── web/                       # Next.js Frontend
-│   ├── pages/                 # App pages
-│   ├── components/            # React components
-│   └── public/                # Static assets
-├── docs/                      # Documentation
+│   ├── app/                   # App pages
+│   └── components/            # React components
 ├── tests/                     # Test suite
-├── input_har/                 # HAR input folder
-├── generated_mocks/           # Generated code
-├── mocks/                     # Mock server files
+│   ├── gauntlet/              # Integration test data
+│   ├── conftest.py            # Test configuration
+│   ├── test_generation.py     # Generation tests
+│   └── test_cli.py            # CLI tests
+├── docs/                      # Documentation
 ├── docker-compose.yml         # Container orchestration
-├── README.md                  # Project readme
-└── .gitignore                 # Git ignore rules
+├── setup.py                   # Package setup
+└── README.md                  # Project readme
 ```
 
-## API Design
+## Auto-Injected Middleware
 
-### Brain Service Endpoints
+Generated mock servers include built-in resilience middleware:
 
-```
-POST /parse
-  - Input: HAR file
-  - Output: Parsed endpoints JSON
+1. **PathTraversalMiddleware** - Blocks path traversal attacks (../, %2e%2e, etc.)
+2. **RateLimitMiddleware** - In-memory rate limiting (60 req/min by default)
+3. **GlobalErrorHandler** - Catches unhandled exceptions, returns JSON errors
 
-POST /generate
-  - Input: Parsed endpoints
-  - Output: Generated Python code
+## Smart Fallback Routing
 
-GET /mocks
-  - Output: List of generated mocks
-
-POST /mocks/deploy
-  - Input: Mock ID
-  - Output: Deployment status
-```
-
-### Mock Server Endpoints (Auto-generated)
-
-```
-GET  /health
-  - Returns: {"status": "OK"}
-
-GET  /mockclaw/info
-  - Returns: Generator metadata
-
-POST /api/login
-  - Body: {"username": "...", "password": "..."}
-  - Returns: {"token": "...", "user": {...}}
-
-GET  /api/users/{id}
-  - Returns: {"id": ..., "name": "...", ...}
-```
-
-## Error Handling
-
-### Query Parameter ?status=error
-When a request includes `?status=error`, the mock server returns a 500 error with detailed error information:
+When `--smart-fallback` or `--no-llm` is enabled, the generator analyzes request bodies
+to create conditional routing logic:
 
 ```python
-if status_param == "error":
-    raise HTTPException(
-        status_code=500,
-        detail={"error": "...", "code": "ERR_..."}
-    )
+@app.post("/checkout")
+async def post_checkout(request: Request):
+    body = await request.json()
+    if body.get("coupon_code") == "EXPIRED2026":
+        raise HTTPException(status_code=400, detail=...)
+    elif body.get("coupon_code") == "SAVE10":
+        return {...}
+    else:
+        return {...}  # default response
 ```
 
 ## Security Considerations
 
-1. **Token Management**: GitHub tokens stored in environment variables
-2. **Network Isolation**: Docker network for service communication
+1. **Path Traversal Protection**: Auto-injected middleware blocks directory traversal
+2. **Rate Limiting**: Prevents abuse with configurable request limits
 3. **Input Validation**: All HAR files validated before processing
-4. **Rate Limiting**: LLM API calls rate-limited
+4. **Error Handling**: Unhandled exceptions return safe JSON responses
 
 ## Future Enhancements
 
