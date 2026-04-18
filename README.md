@@ -2,8 +2,6 @@
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Web UI](https://img.shields.io/badge/Web%20UI-Streamlit-orange.svg)](web/app.py)
-[![Chaos Tests](https://img.shields.io/badge/Chaos-100%25-red.svg)](scripts/hardcore_chaos_test.py)
 
 > **Mission:** Turn production traffic into testable mock servers in **under 2 minutes** - zero configuration required.
 
@@ -276,19 +274,15 @@ Built-in Swagger UI at `http://localhost:8000/docs`:
 
 Built-in adversarial testing:
 ```bash
-# Standard tests (no Docker)
-python scripts/enhanced_chaos_test.py
-
-# Hardcore tests (with Docker infrastructure sabotage)
-python scripts/hardcore_chaos_test.py --use-docker
+# Run built-in adversarial tests
+mockclaw test generated_mocks
 ```
 
 **Tests include:**
-- Container kill during requests
-- Network drop simulation
-- Disk pressure (fill to 99%)
 - Garbage payload handling
 - Path traversal attacks
+- Rate limiting validation
+- Concurrent request handling
 
 ---
 
@@ -307,7 +301,7 @@ mockclaw generate my_traffic.har ./mocks --smart-fallback
 mockclaw serve ./mocks --port 8000
 
 # Run chaos tests
-mockclaw test ./mocks --hardcore
+mockclaw test ./mocks
 ```
 
 ### API Reference
@@ -448,8 +442,8 @@ pip install -e ".[dev]"
 # Run tests
 pytest tests/ -v
 
-# Start Web UI (auto-reload)
-streamlit run web/app.py
+# Start backend API
+python src/brain.py
 ```
 
 ### Contributing Guidelines
@@ -460,17 +454,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 
 ## Roadmap
 
-### Sprint 3 (Current)
-- [x] Smart Fallback bug fixes
-- [x] Web UI MVP (Streamlit)
-- [ ] Fresh Install testing (< 2 min FTUE)
-- [ ] Viral README and demo GIFs
-
-### Upcoming
 - [ ] WebSocket support
-- [ ] Database mock generation
+- [ ] OpenAPI spec export
 - [ ] Traffic replay mode
-- [ ] Multi-language support (Node.js, Go)
+- [ ] Database mock generation
 
 ---
 
@@ -478,7 +465,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 
 Built with:
 - [FastAPI](https://fastapi.tiangolo.com/) - Modern Python web framework
-- [Streamlit](https://streamlit.io/) - Web UI framework
 - [Typer](https://typer.tiangolo.com/) - CLI framework
 - [orjson](https://github.com/ijl/orjson) - Fast JSON library
 

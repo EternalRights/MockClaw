@@ -290,7 +290,6 @@ def main():
     print(f"\nNext steps:")
     print(f"  1. Review the HAR file: {har_path}")
     print(f"  2. Run chaos tests: python scripts/enhanced_chaos_test.py")
-    print(f"  3. Run CI pipeline: scripts/ci_immortal.bat")
     
     return 0
 

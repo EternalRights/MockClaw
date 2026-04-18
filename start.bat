@@ -6,22 +6,17 @@ echo.
 
 cd /d D:\MockClaw
 
-echo [1/2] Starting Backend (Brain API)...
+echo [1/1] Starting Backend (Brain API)...
 start "MockClaw Backend" cmd /k "python src\brain.py"
 timeout /t 2 /nobreak >nul
 
-echo [2/2] Starting Frontend (Next.js)...
-cd web
-start "MockClaw Frontend" cmd /k "npm run dev"
-timeout /t 3 /nobreak >nul
-
 echo.
 echo ============================================================
-echo  Services Started!
+echo  Service Started!
 echo  Backend:  http://localhost:8000
-echo  Frontend: http://localhost:3000
+echo  API Docs: http://localhost:8000/docs
 echo ============================================================
 echo.
-echo Press any key to open the dashboard...
+echo Press any key to open the API docs...
 pause >nul
-start http://localhost:3000
+start http://localhost:8000/docs
