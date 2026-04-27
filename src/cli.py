@@ -7,7 +7,6 @@ import sys
 import socket
 import subprocess
 import uvicorn
-import shutil
 from pathlib import Path
 
 import typer
@@ -95,50 +94,35 @@ def example(
     """
     Quick start: Generate and serve a sample mock server.
     
-    This command creates a complete example from the sample HAR file,
-    generates the mock server, and starts it for immediate testing.
-    
-    Perfect for first-time users to see MockClaw in action!
+    Uses the bundled sample HAR file to generate a working mock server
+    with no additional setup required.
     """
-    console.print("\n[bold cyan]🚀 MockClaw Quick Start[/bold cyan]\n")
+    console.print("\n[bold cyan]MockClaw Quick Start[/bold cyan]\n")
     
     sample_har = Path(__file__).parent.parent / "examples" / "sample.har"
     
     if not sample_har.exists():
-        console.print("[red]❌ Sample HAR file not found![/red]")
-        console.print("\n[yellow]Creating sample HAR file...[/yellow]")
-        
-        examples_dir = Path(__file__).parent.parent / "examples"
-        examples_dir.mkdir(exist_ok=True)
-        
-        test_har = Path(__file__).parent.parent / "tests" / "gauntlet" / "flow.har"
-        if test_har.exists():
-            shutil.copy(test_har, sample_har)
-            console.print("[green]✅ Sample HAR file created[/green]")
-        else:
-            console.print("[red]❌ No sample HAR file available[/red]")
-            console.print("\n[yellow]Please run the following commands first:[/yellow]")
-            console.print("  1. python tests/gauntlet/dummy_shop.py &")
-            console.print("  2. python scripts/gauntlet_recorder.py")
-            raise typer.Exit(1)
+        console.print("[red]Sample HAR file not found![/red]")
+        console.print(f"Expected at: {sample_har}")
+        raise typer.Exit(1)
     
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         console=console,
     ) as progress:
-        task1 = progress.add_task("[cyan]Parsing HAR file...", total=None)
+        task1 = progress.add_task("Parsing HAR file...", total=None)
         
         try:
             parser = HARParser(str(sample_har))
             endpoints_data = parser.export_as_dict()
             num_endpoints = len(endpoints_data.get("endpoints", []))
-            progress.update(task1, description=f"[green]✅ Found {num_endpoints} endpoints[/green]")
+            progress.update(task1, description=f"Found {num_endpoints} endpoints")
         except Exception as e:
-            console.print(f"[red]❌ Failed to parse HAR file: {e}[/red]")
+            console.print(f"Failed to parse HAR file: {e}")
             raise typer.Exit(1)
         
-        task2 = progress.add_task("[cyan]Generating mock server...", total=None)
+        task2 = progress.add_task("Generating mock server...", total=None)
         
         try:
             generator = MockGenerator(use_smart_fallback=True)
@@ -148,22 +132,16 @@ def example(
                 use_smart_fallback=True,
             )
             success_count = sum(1 for r in results if r.success)
-            progress.update(task2, description=f"[green]✅ Generated {success_count}/{len(results)} endpoints[/green]")
+            progress.update(task2, description=f"Generated {success_count}/{len(results)} endpoints")
         except Exception as e:
-            console.print(f"[red]❌ Failed to generate mocks: {e}[/red]")
+            console.print(f"Failed to generate mocks: {e}")
             raise typer.Exit(1)
     
-    console.print(f"\n[bold green]✅ Mock server ready![/bold green]")
-    console.print(f"\n[bold]Next steps:[/bold]")
+    console.print(f"\nMock server ready!")
+    console.print(f"\nNext steps:")
     console.print(f"  1. Start the server: [cyan]mockclaw serve {output_dir} --port {port}[/cyan]")
     console.print(f"  2. Open API docs: [cyan]http://localhost:{port}/docs[/cyan]")
     console.print(f"  3. Test health: [cyan]curl http://localhost:{port}/health[/cyan]")
-    
-    console.print(f"\n[bold]Test scenarios:[/bold]")
-    console.print(f"  # Expired coupon (returns 400):")
-    console.print(f'  [dim]curl -X POST http://localhost:{port}/checkout -H "Content-Type: application/json" -d \'{{"user_id":"test","coupon_code":"EXPIRED2026"}}\'[/dim]')
-    console.print(f"\n  # Valid coupon (returns success):")
-    console.print(f'  [dim]curl -X POST http://localhost:{port}/checkout -H "Content-Type: application/json" -d \'{{"user_id":"test","coupon_code":"SAVE10"}}\'[/dim]')
 
 
 @app.command()

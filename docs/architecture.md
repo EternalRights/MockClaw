@@ -45,7 +45,6 @@ MockClaw is an AI-powered tool that automatically generates Mock API servers fro
 - **Components**:
   - `core/parser.py`: HAR file parser
   - `core/generator.py`: LLM-powered and template-based code generator
-  - `core/resilience.py`: Retry, watchdog, and self-healing utilities
 - **Port**: 8000
 - **Features**:
   - LLM integration (OpenAI GPT-4 / local models)
@@ -102,7 +101,6 @@ MockClaw is an AI-powered tool that automatically generates Mock API servers fro
 │   ├── core/                  # Core modules
 │   │   ├── parser.py          # HAR parser
 │   │   ├── generator.py       # LLM + template generator
-│   │   └── resilience.py      # Retry, watchdog, self-healing
 │   ├── brain.py               # FastAPI backend for dashboard
 │   └── cli.py                 # CLI entry point (Typer)
 ├── scripts/                   # Utility scripts
