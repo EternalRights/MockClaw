@@ -106,12 +106,6 @@ class MockGenerator:
         """
         try:
             code = self._strategy.generate(endpoint_data)
-            if "from fastapi import" not in code:
-                code = (
-                    "from fastapi import HTTPException, status\n"
-                    "from typing import Any\n\n"
-                    + code
-                )
             return GenerationResult(
                 success=True,
                 generated_code=code,
@@ -212,7 +206,7 @@ class MockGenerator:
             '@app.get("/mockclaw/info")',
             "async def info():",
             f"{_FB}'''MockClaw metadata endpoint.'''",
-            f'{_FB}return {{"generator": "MockClaw", "version": "0.1.0"}}',
+            f'{_FB}return {{"generator": "MockClaw", "version": "0.2.0"}}',
             "",
             "# === Generated Endpoints ===",
             "",

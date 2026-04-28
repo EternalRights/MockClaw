@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 
 
-TEST_DATA_DIR = Path(__file__).parent / "test_data"
 GAUNTLET_DIR = Path(__file__).parent / "gauntlet"
 
 

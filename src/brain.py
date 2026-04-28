@@ -278,6 +278,8 @@ async def generate_mock(request: GenerateRequest):
 
     generated_endpoints[endpoint_id]["generated"] = True
     generated_endpoints[endpoint_id]["generated_at"] = datetime.now().isoformat()
+    if result.success:
+        generated_endpoints[endpoint_id]["generated_code"] = result.generated_code
     generation_logs.extend(logs)
 
     logger.info(f"Generated mock for endpoint: {endpoint_id}")
@@ -286,7 +288,8 @@ async def generate_mock(request: GenerateRequest):
         "success": True,
         "endpoint_id": endpoint_id,
         "cached": False,
-        "logs": logs
+        "logs": logs,
+        "generated_code": result.generated_code if result.success else None
     }
 
 

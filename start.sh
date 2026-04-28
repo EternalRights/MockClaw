@@ -8,7 +8,11 @@ echo ""
 cd "$(dirname "$0")"
 
 echo "[1/1] Starting Backend (Brain API)..."
-osascript -e 'tell application "Terminal" to do script "cd '$(pwd)' && python src/brain.py"'
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    osascript -e 'tell application "Terminal" to do script "cd '"$(pwd)"' && python src/brain.py"'
+else
+    python src/brain.py &
+fi
 sleep 2
 
 echo ""
@@ -19,4 +23,8 @@ echo " API Docs: http://localhost:8000/docs"
 echo "============================================================"
 echo ""
 
-open http://localhost:8000/docs
+if command -v xdg-open &> /dev/null; then
+    xdg-open http://localhost:8000/docs
+elif [[ "$OSTYPE" == "darwin"* ]]; then
+    open http://localhost:8000/docs
+fi

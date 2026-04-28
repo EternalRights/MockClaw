@@ -115,7 +115,6 @@ MockClaw is an AI-powered tool that automatically generates Mock API servers fro
 │   ├── test_generation.py     # Generation tests
 │   └── test_cli.py            # CLI tests
 ├── docs/                      # Documentation
-├── docker-compose.yml         # Container orchestration
 ├── setup.py                   # Package setup
 └── README.md                  # Project readme
 ```
