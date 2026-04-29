@@ -87,7 +87,7 @@ class EnhancedChaosBreaker:
 
                 parser = HARParser(har_source)
                 endpoints_data = parser.export_as_dict()
-                generator = MockGenerator()
+                generator = MockGenerator(use_smart_fallback=True)
                 generator.generate_all(endpoints_data['endpoints'], "generated_mocks")
                 self.log("Mock code generated")
             except Exception as e:

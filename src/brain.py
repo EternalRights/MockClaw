@@ -7,6 +7,7 @@ import os
 import sys
 import json
 import hashlib
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -51,7 +52,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="MockClaw Brain",
-    description="AI-Powered Mock API Generator Backend",
+    description="Mock API Generator Backend",
     version=APP_VERSION,
     docs_url="/docs",
     redoc_url="/redoc",
@@ -195,10 +196,11 @@ async def parse_har_file(file: UploadFile = File(...)):
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
         raise HTTPException(status_code=400, detail=f"Invalid file: {e}")
 
-    temp_path = Path("temp_upload.har")
-    try:
-        temp_path.write_bytes(content)
+    with tempfile.NamedTemporaryFile(suffix=".har", delete=False) as tmp:
+        temp_path = Path(tmp.name)
+        tmp.write(content)
 
+    try:
         parser = HARParser(str(temp_path))
         endpoints_data = parser.export_as_dict()
 
@@ -262,6 +264,7 @@ async def generate_mock(request: GenerateRequest):
          "message": "Generating mock code..."},
     ]
 
+    result = None
     try:
         generator = MockGenerator(use_smart_fallback=True)
         result = generator.generate_endpoint(endpoint)
@@ -278,7 +281,7 @@ async def generate_mock(request: GenerateRequest):
 
     generated_endpoints[endpoint_id]["generated"] = True
     generated_endpoints[endpoint_id]["generated_at"] = datetime.now().isoformat()
-    if result.success:
+    if result and result.success:
         generated_endpoints[endpoint_id]["generated_code"] = result.generated_code
     generation_logs.extend(logs)
 
@@ -289,7 +292,7 @@ async def generate_mock(request: GenerateRequest):
         "endpoint_id": endpoint_id,
         "cached": False,
         "logs": logs,
-        "generated_code": result.generated_code if result.success else None
+        "generated_code": result.generated_code if result and result.success else None
     }
 
 

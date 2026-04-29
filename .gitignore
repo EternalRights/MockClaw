@@ -35,20 +35,13 @@ dist/
 .next/
 out/
 
-# Docker
-*.log
-.docker/
-
-# Next.js
-.next/
-out/
-
 # IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+*.iml
 
 # OS
 .DS_Store
@@ -58,7 +51,6 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
-*.env
 *.key
 secrets.json
 credentials.json
@@ -70,30 +62,25 @@ htmlcov/
 .tox/
 .nox/
 
-# Mock data
-captures/
-mocks/
-# Ignore HAR files except sample data
+# HAR files - ignore all except bundled samples
 *.har
 !tests/gauntlet/flow.har
-!sample_data/flow.har
+!examples/sample.har
 
 # Generated code
 generated_mocks/
 final_mocks/
 quick_test_mocks/
 my_mocks/
-my_traffic.har
+test_output_mocks/
 temp_upload.har
-test_security/
 
-# Logs and benchmarks
+# Logs
 logs/*.json
 logs/*.log
 logs/*.txt
-logs/*.md
 !logs/.gitkeep
-test_data/
 
-# IDE and editor files
-*.iml
+# Test artifacts
+test_data/
+captures/

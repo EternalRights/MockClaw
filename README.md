@@ -16,6 +16,7 @@ Turn HAR traffic files into working mock API servers. No manual configuration ne
 ```bash
 # Install
 pip install -r src/requirements.txt
+pip install -e .
 
 # Try the built-in example
 mockclaw example
