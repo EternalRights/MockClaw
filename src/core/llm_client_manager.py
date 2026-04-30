@@ -8,8 +8,6 @@ from __future__ import annotations
 import os
 from typing import Any
 
-OPENAI_AVAILABLE = False
-
 
 class LLMClientManager:
     """Manages LLM client lifecycle with lazy loading and caching.
@@ -46,14 +44,10 @@ class LLMClientManager:
             return self._client
 
         self._initialized = True
-        global OPENAI_AVAILABLE
 
         try:
             from openai import OpenAI
-
-            OPENAI_AVAILABLE = True
         except ImportError:
-            OPENAI_AVAILABLE = False
             return None
 
         if not self._api_key:

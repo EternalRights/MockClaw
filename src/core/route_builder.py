@@ -6,6 +6,7 @@ Builds FastAPI route strings from HAR response data.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 try:
@@ -24,6 +25,8 @@ _STATUS_EXC = {
 
 _FB = "    "
 
+_logger = logging.getLogger(__name__)
+
 
 def body_literal(body_text: str) -> str:
     """Compact JSON string literal from raw HAR body text."""
@@ -32,8 +35,9 @@ def body_literal(body_text: str) -> str:
         if HAS_ORJSON:
             return orjson.dumps(parsed).decode('utf-8')
         return json.dumps(parsed, ensure_ascii=False)
-    except Exception:
-        return '"mock"'
+    except (json.JSONDecodeError, TypeError) as exc:
+        _logger.debug("body_literal: non-JSON body, returning raw string: %s", exc)
+        return json.dumps(body_text)
 
 
 def build_route(

@@ -62,14 +62,13 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 generated_endpoints: dict[str, dict[str, Any]] = {}
 generation_logs: list[dict[str, str]] = []
-endpoint_cache: dict[str, str] = {}
 
 
 class HealthResponse(BaseModel):
@@ -210,11 +209,7 @@ async def parse_har_file(file: UploadFile = File(...)):
             ep_data["id"] = endpoint_id
             ep_data["hash"] = compute_endpoint_hash(ep_data)
 
-            old_hash = endpoint_cache.get(endpoint_id)
-            ep_data["changed"] = old_hash != ep_data["hash"]
-
             generated_endpoints[endpoint_id] = ep_data
-            endpoint_cache[endpoint_id] = ep_data["hash"]
 
             result_endpoints.append(EndpointInfo(
                 id=endpoint_id,
@@ -323,7 +318,6 @@ async def delete_endpoint(endpoint_id: str):
         raise HTTPException(status_code=404, detail="Endpoint not found")
 
     del generated_endpoints[endpoint_id]
-    endpoint_cache.pop(endpoint_id, None)
 
     logger.info(f"Deleted endpoint: {endpoint_id}")
     return {"success": True}

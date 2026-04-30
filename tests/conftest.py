@@ -2,13 +2,9 @@
 MockClaw Test Configuration
 """
 
-from pathlib import Path
 from typing import Any
 
 import pytest
-
-
-GAUNTLET_DIR = Path(__file__).parent / "gauntlet"
 
 
 @pytest.fixture

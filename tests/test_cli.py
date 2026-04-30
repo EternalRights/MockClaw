@@ -6,7 +6,6 @@ import os
 import pytest
 from pathlib import Path
 from typer.testing import CliRunner
-from unittest.mock import patch, MagicMock
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))

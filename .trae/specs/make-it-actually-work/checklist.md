@@ -1,0 +1,11 @@
+- [x] examples/sample.har 存在且为有效 HAR 文件
+- [x] mockclaw example 命令无需前置步骤即可运行成功
+- [x] start.bat 使用相对路径，无硬编码绝对路径
+- [x] Smart Fallback 不包含硬编码字段名列表
+- [x] Smart Fallback 能自动识别任意差异字段（不限于 coupon_code）
+- [x] Smart Fallback 无差异字段时正确回退到普通 fallback
+- [x] LICENSE 文件存在且为 MIT 许可证
+- [x] README 无假引言、无不存在文件引用、无夸大宣传
+- [x] README 无 Web UI 截图引用、无 Docker 部分、无假社区链接
+- [x] pytest 全部通过 (19 passed, 0 failed)
+- [x] 端到端验证：生成功能 + Smart Fallback 通用分析 + 文件完整性全部通过

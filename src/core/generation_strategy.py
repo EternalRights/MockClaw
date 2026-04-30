@@ -19,25 +19,50 @@ class GenerationStrategy(ABC):
 
     @abstractmethod
     def generate(self, endpoint_data: dict[str, Any]) -> str:
-        """Generate FastAPI route code for a single endpoint.
+        """Generate FastAPI route code for a single endpoint."""
+        ...
 
-        Args:
-            endpoint_data: Dictionary containing endpoint information.
+    @staticmethod
+    def _extract_common(
+        endpoint_data: dict[str, Any],
+    ) -> tuple[str, str, list[dict[str, Any]]]:
+        """Extract method, path, and normalised responses from endpoint data.
+
+        Handles the common pre-processing shared by template and smart-routing
+        strategies: pulling out method/path, collecting all responses, and
+        back-filling request bodies from ``sample_request`` when individual
+        responses don't carry their own.
 
         Returns:
-            Generated FastAPI route code string.
-
-        Raises:
-            RuntimeError: When generation fails and no fallback is available.
+            ``(method, path, all_responses)`` ready for :func:`build_route`.
         """
-        ...
+        method = endpoint_data["method"]
+        path = endpoint_data["resource_path"]
+        sample_request = endpoint_data.get("sample_request", {})
+        all_responses: list[dict[str, Any]] = endpoint_data.get(
+            "sample_responses",
+            [endpoint_data.get("sample_response", {})],
+        )
+
+        has_individual_requests = any(
+            resp.get("request") and resp["request"].get("body")
+            for resp in all_responses
+        )
+
+        if not has_individual_requests:
+            request_body = sample_request.get("body")
+            if request_body:
+                for resp in all_responses:
+                    resp["request"] = {"body": request_body}
+
+        return method, path, all_responses
 
 
 class LLMGenerationStrategy(GenerationStrategy):
     """Generate endpoints using an LLM (OpenAI-compatible API).
 
     When the LLM client is unavailable or the call fails, the strategy
-    automatically falls back to :class:`TemplateGenerationStrategy`.
+    automatically falls back to the configured fallback strategy.
     """
 
     def __init__(
@@ -88,25 +113,7 @@ class TemplateGenerationStrategy(GenerationStrategy):
     """
 
     def generate(self, endpoint_data: dict[str, Any]) -> str:
-        method = endpoint_data["method"]
-        path = endpoint_data["resource_path"]
-        sample_request = endpoint_data.get("sample_request", {})
-        all_responses: list[dict[str, Any]] = endpoint_data.get(
-            "sample_responses",
-            [endpoint_data.get("sample_response", {})],
-        )
-
-        has_individual_requests = any(
-            resp.get("request") and resp["request"].get("body")
-            for resp in all_responses
-        )
-
-        if not has_individual_requests:
-            request_body = sample_request.get("body")
-            if request_body:
-                for resp in all_responses:
-                    resp["request"] = {"body": request_body}
-
+        method, path, all_responses = self._extract_common(endpoint_data)
         func_name = generate_func_name(method, path)
         return build_route(
             method,
@@ -126,25 +133,7 @@ class SmartRoutingStrategy(GenerationStrategy):
     """
 
     def generate(self, endpoint_data: dict[str, Any]) -> str:
-        method = endpoint_data["method"]
-        path = endpoint_data["resource_path"]
-        sample_request = endpoint_data.get("sample_request", {})
-        all_responses: list[dict[str, Any]] = endpoint_data.get(
-            "sample_responses",
-            [endpoint_data.get("sample_response", {})],
-        )
-
-        has_individual_requests = any(
-            resp.get("request") and resp["request"].get("body")
-            for resp in all_responses
-        )
-
-        if not has_individual_requests:
-            request_body = sample_request.get("body")
-            if request_body:
-                for resp in all_responses:
-                    resp["request"] = {"body": request_body}
-
+        method, path, all_responses = self._extract_common(endpoint_data)
         func_name = generate_func_name(method, path)
         return build_route(
             method,

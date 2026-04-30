@@ -51,7 +51,6 @@ setup(
     extras_require={
         "dev": [
             "pytest>=8.0.0",
-            "pytest-asyncio>=0.23.0",
             "ruff>=0.1.0",
             "mypy>=1.8.0",
         ],
@@ -63,6 +62,9 @@ setup(
         ],
         "docker": [
             "docker>=7.0.0",
+        ],
+        "test": [
+            "httpx>=0.26.0",
         ],
     },
 )

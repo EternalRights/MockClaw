@@ -325,7 +325,7 @@ def generate(
                         console.print(f"   [red]• {r.endpoint_path}: {r.error}[/red]")
         
         console.print(f"\n[bold green]✅ Mock server generated successfully![/bold green]")
-        console.print(f"\n[bold]Output:[bold]")
+        console.print(f"\n[bold]Output:[/bold]")
         console.print(f"  📂 Directory: [cyan]{Path(output_dir).absolute()}[/cyan]")
         console.print(f"  📄 Main file: [cyan]{Path(output_dir) / 'dynamic_api.py'}[/cyan]")
         

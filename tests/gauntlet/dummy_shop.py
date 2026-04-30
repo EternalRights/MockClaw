@@ -3,9 +3,9 @@ MockClaw Gauntlet - Dummy Shop API
 A test API server with intentional complexity for adversarial testing.
 """
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional
 from datetime import datetime
 import random
 

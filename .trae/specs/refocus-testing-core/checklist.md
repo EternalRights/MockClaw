@@ -1,0 +1,17 @@
+- [x] docker-compose.yml 已删除
+- [x] order_service_test.yml 已删除
+- [x] sample_data/ 目录已删除
+- [x] examples/ 目录已删除
+- [x] CODE_OF_CONDUCT.md 已删除
+- [x] CONTRIBUTING.md 已删除
+- [x] QUICKSTART.md 已删除
+- [x] QUICKSTART_CN.md 已删除
+- [x] CHANGELOG.md 已删除
+- [x] start.bat 已更新（仅启动 brain.py）
+- [x] start.sh 已更新（仅启动 brain.py）
+- [x] README.md 已更新（移除已删除功能引用）
+- [x] docs/architecture.md 已更新（移除 resilience.py 引用）
+- [x] chaos.yml 已更新（移除多余依赖安装）
+- [x] gauntlet_recorder.py 已更新（移除 ci_immortal.bat 引用）
+- [x] pytest 全部通过 (19 passed, 0 failed)
+- [x] 生成功能端到端验证正常 (2/2 endpoints)

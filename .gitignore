@@ -73,7 +73,9 @@ final_mocks/
 quick_test_mocks/
 my_mocks/
 test_output_mocks/
+example_mocks/
 temp_upload.har
+test_order_service/
 
 # Logs
 logs/*.json

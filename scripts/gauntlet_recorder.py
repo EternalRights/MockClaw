@@ -6,11 +6,10 @@ This creates the "flow.har" file for chaos testing.
 
 import json
 import random
-import time
 import requests
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import Any
 
 
 class GauntletRecorder:
@@ -18,7 +17,7 @@ class GauntletRecorder:
     
     def __init__(self, base_url: str = "http://localhost:9000"):
         self.base_url = base_url
-        self.entries: List[Dict[str, Any]] = []
+        self.entries: list[dict[str, Any]] = []
         self.session = requests.Session()
     
     def record_request(self, method: str, url: str, request_data: Any = None, 
