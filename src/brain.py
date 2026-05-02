@@ -69,6 +69,7 @@ app.add_middleware(
 
 generated_endpoints: dict[str, dict[str, Any]] = {}
 generation_logs: list[dict[str, str]] = []
+_MAX_LOG_ENTRIES = 1000
 
 
 class HealthResponse(BaseModel):
@@ -203,6 +204,8 @@ async def parse_har_file(file: UploadFile = File(...)):
         parser = HARParser(str(temp_path))
         endpoints_data = parser.export_as_dict()
 
+        generated_endpoints.clear()
+
         result_endpoints = []
         for i, ep_data in enumerate(endpoints_data["endpoints"]):
             endpoint_id = f"ep_{i}"
@@ -274,20 +277,25 @@ async def generate_mock(request: GenerateRequest):
         logs.append({"timestamp": datetime.now().isoformat(), "level": "error",
                      "message": f"Generation error: {e}"})
 
-    generated_endpoints[endpoint_id]["generated"] = True
-    generated_endpoints[endpoint_id]["generated_at"] = datetime.now().isoformat()
-    if result and result.success:
+    succeeded = result is not None and result.success
+    if succeeded:
+        generated_endpoints[endpoint_id]["generated"] = True
+        generated_endpoints[endpoint_id]["generated_at"] = datetime.now().isoformat()
         generated_endpoints[endpoint_id]["generated_code"] = result.generated_code
-    generation_logs.extend(logs)
 
-    logger.info(f"Generated mock for endpoint: {endpoint_id}")
+    generation_logs.extend(logs)
+    if len(generation_logs) > _MAX_LOG_ENTRIES:
+        generation_logs[:] = generation_logs[-_MAX_LOG_ENTRIES:]
+
+    logger.info(f"Generated mock for endpoint: {endpoint_id} (success={succeeded})")
 
     return {
-        "success": True,
+        "success": succeeded,
         "endpoint_id": endpoint_id,
         "cached": False,
         "logs": logs,
-        "generated_code": result.generated_code if result and result.success else None
+        "generated_code": result.generated_code if succeeded else None,
+        "error": result.error if result and not result.success else None,
     }
 
 

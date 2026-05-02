@@ -21,7 +21,7 @@ STATIC_URL_PATTERNS = ['.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.svg',
                        '.ico', '.woff', '.woff2', '.ttf', '.eot', '.webp']
 
 UUID_PATTERN = re.compile(r'/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.IGNORECASE)
-ID_PATTERN = re.compile(r'/[0-9]+')
+ID_PATTERN = re.compile(r'/[0-9]+(?=/|$)')
 
 
 @dataclass

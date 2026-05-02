@@ -239,12 +239,12 @@ def generate(
     no_llm: bool = typer.Option(
         False,
         "--no-llm",
-        help="Disable LLM, use smart fallback routing",
+        help="Disable LLM, use simple template fallback (no smart routing)",
     ),
     smart_fallback: bool = typer.Option(
         False,
         "--smart-fallback",
-        help="Enable smart conditional routing based on request body",
+        help="Enable smart conditional routing based on request body analysis",
     ),
 ):
     """
@@ -253,20 +253,20 @@ def generate(
     Parses HAR file and generates FastAPI mock endpoints with auto-injected
     resilience middleware (path traversal protection, rate limiting, error handling).
     
-    Use --no-llm or --smart-fallback for rule-based routing without API keys.
+    Modes:
+      - Default: LLM-assisted if API key configured, otherwise template fallback
+      - --no-llm: Simple template fallback (returns HAR response as-is)
+      - --smart-fallback: Smart routing based on request body field analysis
     
     Examples:
       # Generate from sample HAR (recommended for first-time users)
       $ mockclaw generate examples/sample.har ./my_mocks --smart-fallback
       
-      # Generate without LLM (recommended for testing)
+      # Generate without LLM (simple template mode)
       $ mockclaw generate tests/gauntlet/flow.har --no-llm
       
       # Custom output directory
       $ mockclaw generate traffic.har ./my_mocks --smart-fallback
-      
-      # Full generation with verbose output
-      $ mockclaw generate flow.har -o mocks --no-llm && mockclaw serve mocks
     """
     har_path = Path(har_file)
     if not har_path.exists():
@@ -390,13 +390,9 @@ def serve(
         console.print(f"  [cyan]mockclaw generate examples/sample.har {mock_dir} --smart-fallback[/cyan]")
         raise typer.Exit(1)
     
-    mock_path_obj = Path(mock_dir)
-    if mock_path_obj.is_absolute():
-        module_path = f"{mock_path_obj.parts[-1]}.dynamic_api:app"
-    else:
-        clean_path = str(mock_path_obj).replace('\\', '.').replace('/', '.')
-        module_path = f"{clean_path}.dynamic_api:app"
-    
+    mock_path_obj = Path(mock_dir).resolve()
+    module_path = f"{mock_path_obj.name}.dynamic_api:app"
+
     console.print(f"\n[bold cyan]🚀 Starting mock server...[/bold cyan]")
     
     table = Table(show_header=False, box=None)
@@ -433,6 +429,9 @@ def serve(
     console.print(f"\n[dim]Press Ctrl+C to stop[/dim]\n")
     
     try:
+        parent_dir = str(mock_path_obj.parent)
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
         uvicorn.run(
             module_path,
             host=host,
