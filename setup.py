@@ -26,7 +26,7 @@ setup(
     description="Generate mock APIs from HAR files with chaos engineering",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/user/mockclaw",
+    url="https://github.com/EternalRights/MockClaw",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     classifiers=[

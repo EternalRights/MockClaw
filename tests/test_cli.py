@@ -2,6 +2,7 @@
 MockClaw CLI Test Suite
 """
 
+import json
 import os
 import pytest
 from pathlib import Path
@@ -37,19 +38,20 @@ class TestGenerateCommand:
         result = runner.invoke(app, ["generate", "nonexistent.har", "./out"])
         assert result.exit_code != 0, "Should fail for missing HAR file"
 
-    def test_generate_produces_output(self):
-        import tempfile
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            output_dir = os.path.join(tmp_dir, "mocks")
-            result = runner.invoke(app, [
-                "generate",
-                "tests/gauntlet/flow.har",
-                output_dir,
-                "--smart-fallback",
-            ])
-            assert result.exit_code == 0, f"Generate failed: {result.output}"
-            assert os.path.exists(os.path.join(output_dir, "dynamic_api.py")), \
-                "Generated file should exist"
+    def test_generate_produces_output(self, tmp_path, minimal_har_data):
+        har_file = tmp_path / "test.har"
+        har_file.write_text(json.dumps(minimal_har_data), encoding="utf-8")
+
+        output_dir = str(tmp_path / "mocks")
+        result = runner.invoke(app, [
+            "generate",
+            str(har_file),
+            output_dir,
+            "--smart-fallback",
+        ])
+        assert result.exit_code == 0, f"Generate failed: {result.output}"
+        assert os.path.exists(os.path.join(output_dir, "dynamic_api.py")), \
+            "Generated file should exist"
 
 
 class TestServeCommand:

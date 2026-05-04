@@ -59,8 +59,9 @@ _MINIMAL_HAR = {
 class EnhancedChaosBreaker:
     """Enhanced adversarial testing engine."""
 
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = "http://localhost:8000", mock_dir: str = "generated_mocks"):
         self.base_url = base_url
+        self.mock_dir = Path(mock_dir)
         self.results = []
         self.failures = []
         self.server_process = None
@@ -71,10 +72,24 @@ class EnhancedChaosBreaker:
         if level == "FAIL":
             self.failures.append(message)
 
+    def _wait_for_server(self, timeout: float = 15.0) -> bool:
+        """Poll /health until the server is ready or timeout."""
+        import requests as req_lib
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                r = req_lib.get(f"{self.base_url}/health", timeout=2)
+                if r.status_code == 200:
+                    return True
+            except req_lib.RequestException:
+                pass
+            time.sleep(0.5)
+        return False
+
     def start_mock_server(self):
         self.log("Starting mock server...")
 
-        mock_file = Path("generated_mocks/dynamic_api.py")
+        mock_file = self.mock_dir / "dynamic_api.py"
         if not mock_file.exists():
             self.log("Generated mock file not found. Running generator first...", "WARN")
             try:
@@ -88,34 +103,31 @@ class EnhancedChaosBreaker:
                 parser = HARParser(har_source)
                 endpoints_data = parser.export_as_dict()
                 generator = MockGenerator(use_smart_fallback=True)
-                generator.generate_all(endpoints_data['endpoints'], "generated_mocks")
+                generator.generate_all(endpoints_data['endpoints'], str(self.mock_dir))
                 self.log("Mock code generated")
             except Exception as e:
                 self.log(f"Failed to generate mocks: {e}", "FAIL")
                 return False
 
         try:
+            module_path = f"{self.mock_dir.name}.dynamic_api:app"
             self.server_process = subprocess.Popen(
-                [sys.executable, "-m", "uvicorn", "generated_mocks.dynamic_api:app", "--host", "0.0.0.0", "--port", "8000"],
+                [sys.executable, "-m", "uvicorn", module_path, "--host", "0.0.0.0", "--port", "8000"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
             )
 
-            self.log("Waiting for server to start...")
-            time.sleep(3)
+            parent_dir = str(self.mock_dir.resolve().parent)
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
 
-            try:
-                import requests
-                r = requests.get(f"{self.base_url}/health", timeout=5)
-                if r.status_code == 200:
-                    self.log("Server started successfully")
-                    return True
-                else:
-                    self.log(f"Server returned {r.status_code}", "FAIL")
-                    return False
-            except Exception as e:
-                self.log(f"Server health check failed: {e}", "FAIL")
+            self.log("Waiting for server to start...")
+            if self._wait_for_server():
+                self.log("Server started successfully")
+                return True
+            else:
+                self.log("Server health check timed out", "FAIL")
                 return False
 
         except Exception as e:
@@ -136,7 +148,7 @@ class EnhancedChaosBreaker:
                 self.log(f"Error stopping server: {e}", "WARN")
                 try:
                     self.server_process.kill()
-                except:
+                except Exception:
                     pass
 
     async def test_concurrency(self, num_requests: int = 50):
@@ -195,18 +207,14 @@ class EnhancedChaosBreaker:
         server_errors = 0
         for i, garbage in enumerate(garbage_tests):
             try:
-                response = requests.post(f"{self.base_url}/health", json=garbage, timeout=10)
+                response = requests.post(f"{self.base_url}/api/login", json=garbage, timeout=10)
                 if response.status_code >= 500:
                     self.log(f"Server error on garbage test {i}: {response.status_code}", "FAIL")
                     server_errors += 1
-                elif response.status_code == 405:
-                    self.log(f"Garbage test {i}: Correctly rejected (405)")
                 else:
                     self.log(f"Garbage test {i}: Handled gracefully (status {response.status_code})")
             except requests.RequestException as e:
                 self.log(f"Garbage test {i} request error: {e}", "WARN")
-            except Exception as e:
-                self.log(f"Garbage test {i} crashed: {e}", "WARN")
 
         if server_errors > 0:
             return {"status": "failed", "server_errors": server_errors}
@@ -232,7 +240,7 @@ class EnhancedChaosBreaker:
                     self.log(f"Server error on malformed URL {url}: {response.status_code}", "FAIL")
                 else:
                     self.log(f"Malformed URL handled: {url} -> {response.status_code}")
-            except Exception as e:
+            except requests.RequestException as e:
                 self.log(f"Malformed URL test error: {e}", "WARN")
 
         return {"status": "passed", "handled": len(malformed_urls)}
@@ -252,7 +260,7 @@ class EnhancedChaosBreaker:
                     errors += 1
                 elif response.status_code == 429:
                     rate_limited += 1
-            except:
+            except requests.RequestException:
                 errors += 1
 
         elapsed = time.time() - start
@@ -317,7 +325,8 @@ class EnhancedChaosBreaker:
 
 
 async def main():
-    breaker = EnhancedChaosBreaker()
+    mock_dir = sys.argv[1] if len(sys.argv) > 1 else "generated_mocks"
+    breaker = EnhancedChaosBreaker(mock_dir=mock_dir)
 
     results = {"status": "aborted", "total_tests": 0, "failures": 0, "results": {}}
 

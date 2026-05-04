@@ -40,7 +40,7 @@ class GauntletRecorder:
                 "queryString": [],
                 "postData": None,
                 "headersSize": 200,
-                "bodySize": len(json.dumps(request_data)) if request_data else 0
+                "bodySize": len(json.dumps(request_data)) if request_data is not None else 0
             },
             "response": {
                 "status": status_code,
@@ -51,17 +51,17 @@ class GauntletRecorder:
                 ],
                 "content": {
                     "mimeType": "application/json",
-                    "text": json.dumps(response_data) if response_data else json.dumps({"error": error})
+                    "text": json.dumps(response_data) if response_data is not None else json.dumps({"error": error})
                 },
                 "redirectURL": "",
                 "headersSize": 150,
-                "bodySize": len(json.dumps(response_data)) if response_data else 50
+                "bodySize": len(json.dumps(response_data)) if response_data is not None else 50
             },
             "cache": {},
             "timings": {"send": 10, "wait": random.randint(50, 200), "receive": 20}
         }
         
-        if request_data:
+        if request_data is not None:
             entry["request"]["postData"] = {
                 "mimeType": "application/json",
                 "text": json.dumps(request_data)

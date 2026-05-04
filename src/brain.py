@@ -34,7 +34,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 from core.parser import HARParser
 from core.generator import MockGenerator
 
-APP_VERSION = "0.2.0"
+try:
+    from importlib.metadata import version as _pkg_version
+    APP_VERSION = _pkg_version("mockclaw")
+except Exception:
+    APP_VERSION = "0.2.0"
 START_TIME = time.time()
 
 
@@ -247,12 +251,12 @@ async def generate_mock(request: GenerateRequest):
 
     endpoint = generated_endpoints[endpoint_id]
 
-    if endpoint.get("generated") and not endpoint.get("changed", False):
+    if endpoint.get("generated"):
         return {
             "success": True,
             "endpoint_id": endpoint_id,
             "cached": True,
-            "message": "Endpoint already generated, no changes detected"
+            "message": "Endpoint already generated"
         }
 
     logs = [
@@ -306,8 +310,7 @@ async def get_logs(limit: int = 100):
 
 @app.delete("/logs", tags=["System"])
 async def clear_logs():
-    global generation_logs
-    generation_logs = []
+    generation_logs.clear()
     logger.info("Logs cleared")
     return {"success": True}
 
@@ -334,24 +337,20 @@ async def delete_endpoint(endpoint_id: str):
 @app.post("/generate-all", tags=["Generation"])
 async def generate_all_endpoints():
     results = []
-    tasks = []
 
     for endpoint_id, endpoint in generated_endpoints.items():
-        if not endpoint.get("generated") or endpoint.get("changed"):
-            tasks.append(generate_mock(GenerateRequest(endpoint_id=endpoint_id)))
-
-    if tasks:
-        import asyncio
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        if not endpoint.get("generated"):
+            result = await generate_mock(GenerateRequest(endpoint_id=endpoint_id))
+            results.append(result)
 
     successful = sum(1 for r in results if isinstance(r, dict) and r.get("success"))
 
-    logger.info(f"Batch generation complete: {successful}/{len(tasks)}")
+    logger.info(f"Batch generation complete: {successful}/{len(results)}")
 
     return {
         "success": True,
         "generated_count": successful,
-        "total_attempted": len(tasks)
+        "total_attempted": len(results)
     }
 
 

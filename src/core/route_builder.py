@@ -63,6 +63,14 @@ def build_route(
     if use_smart_fallback and has_request_body and method in ["POST", "PUT"]:
         return _generate_smart_route(method, path, all_responses, func_name)
 
+    if not all_responses:
+        return (
+            f'@app.{method.lower()}("{path}")\n'
+            f"async def {func_name}():\n"
+            f'{_FB}"""Mock endpoint -- no HAR response data."""\n'
+            f"{_FB}return {{}}\n"
+        )
+
     sc0 = all_responses[0].get("status", 200)
     body0 = body_literal(all_responses[0].get("body") or "")
 

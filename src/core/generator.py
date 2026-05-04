@@ -18,9 +18,16 @@ from .generation_strategy import (
 )
 from .llm_client_manager import LLMClientManager
 from .prompt_builder import PromptBuilder
-from .route_builder import _FB
 
-_MOCK_SERVER_HEADER = """\
+try:
+    from importlib.metadata import version as _pkg_version
+    _VERSION = _pkg_version("mockclaw")
+except Exception:
+    _VERSION = "0.2.0"
+
+_INDENT = "    "
+
+_MOCK_SERVER_HEADER_TPL = """\
 # MockClaw Auto-Generated Mock Server
 # Do not edit manually -- regenerate from HAR traffic.
 
@@ -40,10 +47,10 @@ app = FastAPI(title='MockClaw Generated API')
 class PathTraversalMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        dangerous = ['\\.\\.', '%2e%2e', '%252e', '%2f%5c\\.\\.', '//']
+        dangerous = ['\\\\.\\\\.', '%2e%2e', '%252e', '%2f%5c\\\\.\\\\.', '//']
         for pattern in dangerous:
             if re.search(pattern, path, re.IGNORECASE):
-                return JSONResponse(status_code=400, content={'error': 'Invalid path', 'code': 'PATH_TRAVERSAL_BLOCKED'})
+                return JSONResponse(status_code=400, content={{'error': 'Invalid path', 'code': 'PATH_TRAVERSAL_BLOCKED'}})
         return await call_next(request)
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -56,7 +63,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         current_time = time.time()
         self.request_counts[client_ip] = [t for t in self.request_counts[client_ip] if current_time - t < 60]
         if len(self.request_counts[client_ip]) >= self.requests_per_minute:
-            return JSONResponse(status_code=429, content={'error': 'Too many requests', 'code': 'RATE_LIMIT_EXCEEDED'})
+            return JSONResponse(status_code=429, content={{'error': 'Too many requests', 'code': 'RATE_LIMIT_EXCEEDED'}})
         self.request_counts[client_ip].append(current_time)
         return await call_next(request)
 
@@ -65,9 +72,9 @@ class GlobalErrorHandler(BaseHTTPMiddleware):
         try:
             return await call_next(request)
         except HTTPException as e:
-            return JSONResponse(status_code=e.status_code, content={'error': str(e.detail), 'code': 'HTTP_ERROR'})
+            return JSONResponse(status_code=e.status_code, content={{'error': str(e.detail), 'code': 'HTTP_ERROR'}})
         except Exception as e:
-            return JSONResponse(status_code=500, content={'error': 'Internal server error', 'code': 'INTERNAL_ERROR'})
+            return JSONResponse(status_code=500, content={{'error': 'Internal server error', 'code': 'INTERNAL_ERROR'}})
 
 # Apply middleware
 app.add_middleware(GlobalErrorHandler)
@@ -76,16 +83,20 @@ app.add_middleware(PathTraversalMiddleware)
 
 @app.get("/health")
 async def health():
-{_FB}'''Health check endpoint.'''
-{_FB}return {{"status": "OK", "service": "MockClaw"}}
+{indent}'''Health check endpoint.'''
+{indent}return {{"status": "OK", "service": "MockClaw"}}
 
 @app.get("/mockclaw/info")
 async def info():
-{_FB}'''MockClaw metadata endpoint.'''
-{_FB}return {{"generator": "MockClaw", "version": "0.2.0"}}
+{indent}'''MockClaw metadata endpoint.'''
+{indent}return {{"generator": "MockClaw", "version": "{version}"}}
 
 # === Generated Endpoints ===
 """
+
+
+def _get_mock_server_header() -> str:
+    return _MOCK_SERVER_HEADER_TPL.format(indent=_INDENT, version=_VERSION)
 
 
 class GenerationResult:
@@ -201,7 +212,7 @@ class MockGenerator:
         output_path.mkdir(parents=True, exist_ok=True)
 
         results: list[GenerationResult] = []
-        parts: list[str] = [_MOCK_SERVER_HEADER]
+        parts: list[str] = [_get_mock_server_header()]
 
         for endpoint in endpoints:
             if endpoint["resource_path"] in self._BUILTIN_PATHS:

@@ -25,6 +25,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 from core.parser import HARParser
 from core.generator import MockGenerator
 
+try:
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("mockclaw")
+except Exception:
+    __version__ = "0.2.0"
+
 console = Console()
 
 app = typer.Typer(
@@ -55,7 +61,7 @@ Documentation: https://github.com/EternalRights/MockClaw/docs
 
 def version_callback(value: bool):
     if value:
-        console.print("[bold cyan]MockClaw[/bold cyan] version [bold]0.2.0[/bold]")
+        console.print(f"[bold cyan]MockClaw[/bold cyan] version [bold]{__version__}[/bold]")
         raise typer.Exit()
 
 
@@ -300,7 +306,10 @@ def generate(
             
             task2 = progress.add_task("[cyan]Generating mocks...", total=None)
             
-            if no_llm or smart_fallback:
+            if no_llm:
+                mode = "Template Fallback (simple, no smart routing)"
+                generator = MockGenerator(use_smart_fallback=False)
+            elif smart_fallback:
                 mode = "Smart Fallback (rule-based routing)"
                 generator = MockGenerator(use_smart_fallback=True)
             else:
@@ -312,7 +321,6 @@ def generate(
             results = generator.generate_all(
                 endpoints_data["endpoints"],
                 output_dir,
-                use_smart_fallback=no_llm or smart_fallback,
             )
             
             success_count = sum(1 for r in results if r.success)
@@ -483,7 +491,7 @@ def test(
     
     try:
         result = subprocess.run(
-            [sys.executable, str(test_script)],
+            [sys.executable, str(test_script), mock_dir],
             cwd=Path.cwd(),
             capture_output=False,
             timeout=300,
@@ -514,7 +522,7 @@ def info():
     table.add_column("Component", style="bold")
     table.add_column("Version/Info", style="green")
     
-    table.add_row("MockClaw", "0.2.0")
+    table.add_row("MockClaw", __version__)
     table.add_row("Python", f"{sys.version}")
     table.add_row("Platform", sys.platform)
     table.add_row("Working Directory", str(Path.cwd()))

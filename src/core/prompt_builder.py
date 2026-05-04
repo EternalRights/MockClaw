@@ -41,14 +41,16 @@ class PromptBuilder:
 
         Args:
             endpoint_data: Dictionary containing endpoint information
-                including method, path, sample request, and sample response.
+                including method, path, sample request, and sample response(s).
 
         Returns:
             Formatted prompt string for the LLM.
         """
         req = endpoint_data.get("sample_request", {})
         resp = endpoint_data.get("sample_response", {})
-        return (
+        all_responses = endpoint_data.get("sample_responses", [])
+
+        prompt = (
             f"Generate a FastAPI mock endpoint for:\n\n"
             f"Method: {endpoint_data['method']}\n"
             f"Path: {endpoint_data['resource_path']}\n\n"
@@ -59,3 +61,10 @@ class PromptBuilder:
             f"- Status: {resp.get('status', 200)}\n"
             f"- Body: {resp.get('body', 'N/A')}"
         )
+
+        if len(all_responses) > 1:
+            prompt += "\n\nAdditional observed responses:"
+            for i, r in enumerate(all_responses[1:], start=2):
+                prompt += f"\n  [{i}] status {r.get('status', 200)}: {(r.get('body') or '')[:120]}"
+
+        return prompt

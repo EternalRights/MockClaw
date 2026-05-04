@@ -92,7 +92,7 @@ async def add_to_cart(user_id: str, item: CartItem):
     if user_id not in cart_db:
         cart_db[user_id] = {"items": [], "total": 0.0}
     
-    cart_db[user_id]["items"].append(item.dict())
+    cart_db[user_id]["items"].append(item.model_dump())
     cart_db[user_id]["total"] = sum(
         i["price"] * i["quantity"] for i in cart_db[user_id]["items"]
     )
