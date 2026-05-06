@@ -5,12 +5,11 @@ Install with: pip install -e .
 
 from setuptools import setup, find_packages
 from pathlib import Path
+import re
 
-# Read README for long description
 readme_path = Path(__file__).parent / "README.md"
 long_description = readme_path.read_text(encoding="utf-8") if readme_path.exists() else ""
 
-# Read requirements
 requirements_path = Path(__file__).parent / "src" / "requirements.txt"
 requirements = [
     line.strip()
@@ -18,9 +17,13 @@ requirements = [
     if line.strip() and not line.startswith("#")
 ]
 
+init_path = Path(__file__).parent / "src" / "__init__.py"
+_version_match = re.search(r'^__version__\s*=\s*["\']([^"\']+)', init_path.read_text(encoding="utf-8"), re.MULTILINE)
+_version = _version_match.group(1) if _version_match else "0.2.0"
+
 setup(
     name="mockclaw",
-    version="0.2.0",
+    version=_version,
     author="MockClaw Team",
     author_email="mockclaw@example.com",
     description="Generate mock APIs from HAR files with chaos engineering",

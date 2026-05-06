@@ -38,7 +38,10 @@ try:
     from importlib.metadata import version as _pkg_version
     APP_VERSION = _pkg_version("mockclaw")
 except Exception:
-    APP_VERSION = "0.2.0"
+    try:
+        from mockclaw import __version__ as APP_VERSION
+    except ImportError:
+        APP_VERSION = "0.2.0"
 START_TIME = time.time()
 
 
