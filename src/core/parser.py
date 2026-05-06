@@ -102,7 +102,12 @@ class HARParser:
 
     def _parse_headers(self, headers: list) -> dict:
         """Convert headers list to dictionary."""
-        return {h['name'].lower(): h['value'] for h in headers}
+        result = {}
+        for h in headers:
+            name = h.get('name')
+            if name:
+                result[name.lower()] = h.get('value', '')
+        return result
 
     def _parse_request(self, entry: dict) -> HTTPRequest:
         """Parse a HAR entry's request."""
@@ -210,12 +215,6 @@ class HARParser:
                         }
                         for i, r in enumerate(ep.responses)
                     ],
-                    "sample_response": {
-                        "status": ep.responses[0].status if ep.responses else 200,
-                        "headers": ep.responses[0].headers if ep.responses else {},
-                        "body": ep.responses[0].body if ep.responses else None,
-                        "content_type": ep.responses[0].content_type if ep.responses else None,
-                    },
                 }
                 for ep in endpoints
             ],

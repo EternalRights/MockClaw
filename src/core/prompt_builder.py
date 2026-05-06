@@ -47,8 +47,8 @@ class PromptBuilder:
             Formatted prompt string for the LLM.
         """
         req = endpoint_data.get("sample_request", {})
-        resp = endpoint_data.get("sample_response", {})
         all_responses = endpoint_data.get("sample_responses", [])
+        resp = all_responses[0] if all_responses else {}
 
         prompt = (
             f"Generate a FastAPI mock endpoint for:\n\n"

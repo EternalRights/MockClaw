@@ -29,7 +29,10 @@ try:
     from importlib.metadata import version as _pkg_version
     __version__ = _pkg_version("mockclaw")
 except Exception:
-    __version__ = "0.2.0"
+    import re as _re
+    _init = Path(__file__).parent / "__init__.py"
+    _m = _re.search(r'^__version__\s*=\s*["\']([^"\']+)', _init.read_text(encoding="utf-8"), _re.MULTILINE)
+    __version__ = _m.group(1) if _m else "0.2.0"
 
 console = Console()
 

@@ -23,7 +23,10 @@ try:
     from importlib.metadata import version as _pkg_version
     _VERSION = _pkg_version("mockclaw")
 except Exception:
-    _VERSION = "0.2.0"
+    import re as _re
+    _init = Path(__file__).parent.parent / "__init__.py"
+    _m = _re.search(r'^__version__\s*=\s*["\']([^"\']+)', _init.read_text(encoding="utf-8"), _re.MULTILINE)
+    _VERSION = _m.group(1) if _m else "0.2.0"
 
 _INDENT = "    "
 
@@ -35,7 +38,6 @@ from fastapi import FastAPI, HTTPException, status, Request, Response
 from fastapi.responses import JSONResponse
 from typing import Any
 from starlette.middleware.base import BaseHTTPMiddleware
-import re
 import time
 import json
 from collections import defaultdict
@@ -46,10 +48,10 @@ app = FastAPI(title='MockClaw Generated API')
 
 class PathTraversalMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-        dangerous = [r'\.\.', r'%2e%2e', r'%252e', r'%2f%5c', r'//']
+        path = request.url.path.lower()
+        dangerous = ['..', '%2e%2e', '%252e', '%2f%5c', '//']
         for pattern in dangerous:
-            if re.search(pattern, path, re.IGNORECASE):
+            if pattern in path:
                 return JSONResponse(status_code=400, content={{'error': 'Invalid path', 'code': 'PATH_TRAVERSAL_BLOCKED'}})
         return await call_next(request)
 

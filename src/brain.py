@@ -6,7 +6,6 @@ Provides REST API for the dashboard.
 import os
 import sys
 import json
-import hashlib
 import tempfile
 import time
 from pathlib import Path
@@ -21,7 +20,7 @@ if sys.platform == 'win32':
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,10 +37,10 @@ try:
     from importlib.metadata import version as _pkg_version
     APP_VERSION = _pkg_version("mockclaw")
 except Exception:
-    try:
-        from mockclaw import __version__ as APP_VERSION
-    except ImportError:
-        APP_VERSION = "0.2.0"
+    import re as _re
+    _init = Path(__file__).parent / "__init__.py"
+    _m = _re.search(r'^__version__\s*=\s*["\']([^"\']+)', _init.read_text(encoding="utf-8"), _re.MULTILINE)
+    APP_VERSION = _m.group(1) if _m else "0.2.0"
 START_TIME = time.time()
 
 
@@ -77,6 +76,7 @@ app.add_middleware(
 generated_endpoints: dict[str, dict[str, Any]] = {}
 generation_logs: list[dict[str, str]] = []
 _MAX_LOG_ENTRIES = 1000
+_generator = MockGenerator(use_smart_fallback=True)
 
 
 class HealthResponse(BaseModel):
@@ -92,9 +92,9 @@ class EndpointInfo(BaseModel):
     method: str = Field(..., description="HTTP method")
     status: int = Field(..., description="HTTP status code")
     generated: bool = Field(False, description="Whether mock is generated")
-    hash: str | None = Field(None, description="Content hash for change detection")
 
-    @validator('method')
+    @field_validator('method')
+    @classmethod
     def validate_method(cls, v):
         allowed = {'GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'}
         if v.upper() not in allowed:
@@ -110,11 +110,6 @@ class ParseResponse(BaseModel):
     total_endpoints: int = Field(..., description="Number of endpoints found")
     endpoints: list[EndpointInfo] = Field(..., description="Parsed endpoints")
     processing_time_ms: int = Field(..., description="Processing duration")
-
-
-def compute_endpoint_hash(endpoint_data: dict[str, Any]) -> str:
-    content = json.dumps(endpoint_data, sort_keys=True)
-    return hashlib.sha256(content.encode()).hexdigest()[:16]
 
 
 def get_uptime() -> str:
@@ -217,7 +212,6 @@ async def parse_har_file(file: UploadFile = File(...)):
         for i, ep_data in enumerate(endpoints_data["endpoints"]):
             endpoint_id = f"ep_{i}"
             ep_data["id"] = endpoint_id
-            ep_data["hash"] = compute_endpoint_hash(ep_data)
 
             generated_endpoints[endpoint_id] = ep_data
 
@@ -225,9 +219,8 @@ async def parse_har_file(file: UploadFile = File(...)):
                 id=endpoint_id,
                 path=ep_data["resource_path"],
                 method=ep_data["method"],
-                status=ep_data.get("sample_response", {}).get("status", 200),
+                status=ep_data.get("sample_responses", [{}])[0].get("status", 200),
                 generated=False,
-                hash=ep_data["hash"]
             ))
 
         processing_time = int((time.time() - start_time) * 1000)
@@ -271,8 +264,7 @@ async def generate_mock(request: GenerateRequest):
 
     result = None
     try:
-        generator = MockGenerator(use_smart_fallback=True)
-        result = generator.generate_endpoint(endpoint)
+        result = _generator.generate_endpoint(endpoint)
 
         if result.success:
             logs.append({"timestamp": datetime.now().isoformat(), "level": "success",

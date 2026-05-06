@@ -41,8 +41,11 @@ class GenerationStrategy(ABC):
         sample_request = endpoint_data.get("sample_request", {})
         all_responses: list[dict[str, Any]] = endpoint_data.get(
             "sample_responses",
-            [endpoint_data.get("sample_response", {})],
+            [],
         )
+
+        if not all_responses:
+            all_responses = [{}]
 
         has_individual_requests = any(
             resp.get("request") and resp["request"].get("body")
