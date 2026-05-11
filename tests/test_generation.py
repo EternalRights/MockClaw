@@ -8,7 +8,7 @@ import pytest
 
 from core.parser import HARParser
 from core.generator import MockGenerator
-from core.route_builder import build_route
+from core.route_builder import build_route, generate_func_name
 
 
 def test_har_parser(tmp_path, minimal_har_data):
@@ -115,3 +115,12 @@ def test_health_endpoints_in_generated_code(tmp_path, minimal_har_data):
     assert "/mockclaw/info" in content
     assert "PathTraversalMiddleware" in content
     assert "RateLimitMiddleware" in content
+
+
+def test_generate_func_name_sanitizes_special_chars():
+    assert generate_func_name("GET", "/api/v1.0/users") == "get_api_v1_0_users"
+    assert generate_func_name("POST", "/api/user-profile") == "post_api_user_profile"
+    assert generate_func_name("DELETE", "/api/items/{id}") == "delete_api_items_id"
+    assert generate_func_name("GET", "/").isidentifier()
+    fn = generate_func_name("GET", "/api/v2.1/beta-test")
+    assert fn.isidentifier(), f"'{fn}' is not a valid Python identifier"

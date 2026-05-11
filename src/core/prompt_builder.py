@@ -13,17 +13,18 @@ SYSTEM_PROMPT = """You are an expert API architect. Given this HTTP request/resp
 
 Requirements:
 1. Use Pydantic models for request/response validation
-2. Use 'Faker' library to generate realistic fake data for fields like 'name', 'email', 'address', 'phone', 'id'
-3. If the response contains a list, generate exactly 5 items
+2. Use realistic hardcoded sample data matching the original response structure
+3. If the response contains a list, generate exactly 3 items
 4. Handle path parameters (e.g., /users/{user_id}) correctly
 5. Support query parameters for filtering
 6. If request has a query param `?status=error`, return a 500 error with a specific error message
 7. Include proper HTTP status codes and error handling
+8. Only use standard library and fastapi/pydantic -- no third-party packages like faker
 
 Generate ONLY the Python code with:
 - Pydantic models for request/response
 - FastAPI route decorators (@app.get, @app.post, etc.)
-- Faker data generation
+- Hardcoded realistic sample data
 - Type hints throughout
 
 Return ONLY the Python code in a markdown code block labeled 'python'."""

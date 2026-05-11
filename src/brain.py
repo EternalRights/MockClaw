@@ -127,16 +127,8 @@ def get_uptime() -> str:
 def check_services() -> dict[str, str]:
     services = {
         "backend": "running",
-        "docker": "unknown",
         "llm": "not_configured"
     }
-    try:
-        import docker
-        client = docker.from_env(timeout=5)
-        client.ping()
-        services["docker"] = "running"
-    except Exception:
-        services["docker"] = "not_available"
     llm_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
     if llm_key:
         services["llm"] = "configured"

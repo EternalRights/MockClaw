@@ -115,7 +115,11 @@ class HARParser:
         url = request.get('url', '')
 
         query_params = request.get('queryString', [])
-        query_dict = {p['name']: p.get('value', '') for p in query_params}
+        query_dict = {}
+        for p in query_params:
+            name = p.get('name')
+            if name:
+                query_dict[name] = p.get('value', '')
 
         body = None
         if request.get('postData'):

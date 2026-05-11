@@ -55,8 +55,10 @@ class GenerationStrategy(ABC):
         if not has_individual_requests:
             request_body = sample_request.get("body")
             if request_body:
-                for resp in all_responses:
-                    resp["request"] = {"body": request_body}
+                all_responses = [
+                    {**resp, "request": {"body": request_body}}
+                    for resp in all_responses
+                ]
 
         return method, path, all_responses
 

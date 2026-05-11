@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 try:
@@ -60,7 +61,7 @@ def build_route(
         for resp in all_responses
     )
 
-    if use_smart_fallback and has_request_body and method in ["POST", "PUT"]:
+    if use_smart_fallback and has_request_body and method in ["POST", "PUT", "PATCH", "DELETE"]:
         return _generate_smart_route(method, path, all_responses, func_name)
 
     if not all_responses:
@@ -204,14 +205,6 @@ def _generate_smart_route(
 
 def generate_func_name(method: str, path: str) -> str:
     """Build a valid Python function name from HTTP method and path."""
-    return "_".join(
-        filter(
-            None,
-            [
-                method.lower(),
-                path.replace("/", "_")
-                .replace("{", "")
-                .replace("}", ""),
-            ],
-        )
-    )
+    name = method.lower() + "_" + path.replace("/", "_").replace("{", "").replace("}", "")
+    name = re.sub(r'[^a-zA-Z0-9_]', '_', name)
+    return "_".join(filter(None, name.split("_")))

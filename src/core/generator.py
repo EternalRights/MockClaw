@@ -1,6 +1,6 @@
 """
-MockClaw AI Generator
-Uses LLM to generate FastAPI mock endpoints from parsed HAR data.
+MockClaw Generator
+Generates FastAPI mock endpoints from parsed HAR data.
 """
 
 from __future__ import annotations
