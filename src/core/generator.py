@@ -18,15 +18,9 @@ from .generation_strategy import (
 )
 from .llm_client_manager import LLMClientManager
 from .prompt_builder import PromptBuilder
+from _version import get_version
 
-try:
-    from importlib.metadata import version as _pkg_version
-    _VERSION = _pkg_version("mockclaw")
-except Exception:
-    import re as _re
-    _init = Path(__file__).parent.parent / "__init__.py"
-    _m = _re.search(r'^__version__\s*=\s*["\']([^"\']+)', _init.read_text(encoding="utf-8"), _re.MULTILINE)
-    _VERSION = _m.group(1) if _m else "0.2.0"
+_VERSION = get_version()
 
 _INDENT = "    "
 
@@ -36,6 +30,7 @@ _MOCK_SERVER_HEADER_TPL = """\
 
 from fastapi import FastAPI, HTTPException, status, Request, Response
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from typing import Any
 from starlette.middleware.base import BaseHTTPMiddleware
 import time
@@ -43,6 +38,14 @@ import json
 from collections import defaultdict
 
 app = FastAPI(title='MockClaw Generated API')
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # === Resilience Middleware (Auto-Injected) ===
 

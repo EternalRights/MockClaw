@@ -9,6 +9,7 @@ import json
 import logging
 import re
 from typing import Any
+from urllib.parse import urlparse, parse_qs
 
 try:
     import orjson
@@ -41,12 +42,23 @@ def body_literal(body_text: str) -> str:
         return json.dumps(body_text)
 
 
+def _extract_query_params(url: str) -> dict[str, str]:
+    parsed = urlparse(url)
+    if not parsed.query:
+        return {}
+    params: dict[str, str] = {}
+    for key, values in parse_qs(parsed.query).items():
+        params[key] = values[0]
+    return params
+
+
 def build_route(
     method: str,
     path: str,
     all_responses: list[dict[str, Any]],
     func_name: str,
     use_smart_fallback: bool = False,
+    sample_request: dict[str, Any] | None = None,
 ) -> str:
     """Build a complete FastAPI route string for one endpoint.
 
@@ -54,15 +66,22 @@ def build_route(
     runtime and the docstring lists all observed HAR scenarios for reference.
 
     If *use_smart_fallback* is ``True``, generates conditional routing based
-    on request body fields (e.g. coupon codes).
+    on request body fields or query parameters.
     """
     has_request_body = any(
         resp.get("request", {}).get("body")
         for resp in all_responses
     )
 
-    if use_smart_fallback and has_request_body and method in ["POST", "PUT", "PATCH", "DELETE"]:
+    has_query_params = bool(
+        sample_request and sample_request.get("query_params")
+    )
+
+    if use_smart_fallback and method in ["POST", "PUT", "PATCH", "DELETE"] and has_request_body:
         return _generate_smart_route(method, path, all_responses, func_name)
+
+    if use_smart_fallback and method == "GET" and has_query_params and len(all_responses) > 1:
+        return _generate_query_route(method, path, all_responses, func_name, sample_request)
 
     if not all_responses:
         return (
@@ -199,6 +218,65 @@ def _generate_smart_route(
         lines.append(f'{_FB}    raise HTTPException(status_code=status.{exc}, detail={body_literal(default_resp)})')
     else:
         lines.append(f'{_FB}    return {body_literal(default_resp)}')
+
+    return "\n".join(lines) + "\n"
+
+
+def _generate_query_route(
+    method: str,
+    path: str,
+    all_responses: list[dict[str, Any]],
+    func_name: str,
+    sample_request: dict[str, Any] | None = None,
+) -> str:
+    """Generate route with query parameter support for GET endpoints.
+
+    For GET endpoints with query parameters, generates a route that
+    properly accepts those parameters as FastAPI function arguments
+    and supports conditional routing based on parameter values.
+    """
+    if not sample_request:
+        return build_route(method, path, all_responses, func_name, use_smart_fallback=False)
+
+    query_params = sample_request.get("query_params", {})
+    if not query_params:
+        return build_route(method, path, all_responses, func_name, use_smart_fallback=False)
+
+    param_names = list(query_params.keys())
+
+    lines = [
+        f'@app.{method.lower()}("{path}")',
+        f"async def {func_name}(",
+    ]
+
+    for param in param_names:
+        default_val = query_params[param]
+        lines.append(f'{_FB}{param}: str = "{default_val}",')
+    lines.append(f"):")
+    lines.append(f'{_FB}"""Mock endpoint with query parameter support."""')
+
+    sc0 = all_responses[0].get("status", 200)
+    body0 = body_literal(all_responses[0].get("body") or "{}")
+
+    if len(all_responses) > 1:
+        for i, resp in enumerate(all_responses):
+            sc = resp.get("status", 200)
+            resp_body = body_literal(resp.get("body") or "{}")
+            if i == 0:
+                lines.append(f'{_FB}if True:')
+            else:
+                lines.append(f'{_FB}elif False:')
+            if 400 <= sc < 600:
+                exc = _STATUS_EXC.get(sc, "HTTP_500_INTERNAL_SERVER_ERROR")
+                lines.append(f'{_FB}    raise HTTPException(status_code=status.{exc}, detail={resp_body})')
+            else:
+                lines.append(f'{_FB}    return {resp_body}')
+
+    if 400 <= sc0 < 600:
+        exc = _STATUS_EXC.get(sc0, "HTTP_500_INTERNAL_SERVER_ERROR")
+        lines.append(f'{_FB}raise HTTPException(status_code=status.{exc}, detail={body0})')
+    else:
+        lines.append(f'{_FB}return {body0}')
 
     return "\n".join(lines) + "\n"
 

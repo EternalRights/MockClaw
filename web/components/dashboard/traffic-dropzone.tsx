@@ -11,7 +11,7 @@ export function TrafficDropzone() {
   const [clawAnimation, setClawAnimation] = useState(false)
   const [matrixChars, setMatrixChars] = useState<Array<{ id: number; char: string; delay: number }>>([])
   const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking')
-  const { harFile, setHarFile, isProcessing, setProcessing, addEndpoints, clearEndpoints } = useStore()
+  const { harFile, setHarFile, isProcessing, setProcessing, addEndpoints, clearEndpoints, endpoints } = useStore()
 
   // Check backend health on mount
   useEffect(() => {
@@ -47,7 +47,7 @@ export function TrafficDropzone() {
       const result = await parseHarFile(file)
       
       // Add endpoints to store
-      addEndpoints(result.endpoints.map((ep: any) => ({
+      addEndpoints(result.endpoints.map((ep: { id: string; path: string; method: string; status: number }) => ({
         id: ep.id,
         path: ep.path,
         method: ep.method,
@@ -184,7 +184,7 @@ export function TrafficDropzone() {
 
             {/* Detected Endpoints */}
             <div className="space-y-2 relative z-10">
-              {useStore.getState().endpoints.slice(0, 6).map((endpoint, i) => (
+              {endpoints.slice(0, 6).map((endpoint, i) => (
                 <div 
                   key={endpoint.id}
                   className="flex items-center gap-3 font-mono text-sm"

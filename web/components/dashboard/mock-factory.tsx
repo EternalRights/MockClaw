@@ -5,13 +5,12 @@ import { Play, CheckCircle2, Loader2, Terminal, Zap } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useStore, type Endpoint } from '@/lib/store'
 import { Button } from '@/components/ui/button'
-import { generateMock, generateAll as apiGenerateAll } from '@/lib/api'
+import { generateMock, generateAll as apiGenerateAll, getEndpoints } from '@/lib/api'
 
 export function MockFactory() {
   const { endpoints, updateEndpoint, logs, addLog, clearLogs } = useStore()
   const terminalRef = useRef<HTMLDivElement>(null)
 
-  // Auto-scroll logs
   useEffect(() => {
     if (terminalRef.current) {
       terminalRef.current.scrollTop = terminalRef.current.scrollHeight
@@ -20,21 +19,22 @@ export function MockFactory() {
 
   const generateEndpoint = async (endpoint: Endpoint) => {
     updateEndpoint(endpoint.id, { generating: true })
-    
+
     try {
       const result = await generateMock(endpoint.id)
-      
-      // Add logs from API
-      result.logs.forEach((log: any) => {
-        addLog({ timestamp: log.timestamp, level: log.level, message: log.message })
-      })
+
+      if (result.logs) {
+        result.logs.forEach((log: { timestamp: string; level: string; message: string }) => {
+          addLog({ timestamp: log.timestamp, level: log.level as 'info' | 'success' | 'error' | 'thinking', message: log.message })
+        })
+      }
 
       updateEndpoint(endpoint.id, { generating: false, generated: result.success })
     } catch (error) {
-      addLog({ 
-        timestamp: new Date().toLocaleTimeString(), 
-        level: 'error', 
-        message: `Failed to generate ${endpoint.path}: ${error}` 
+      addLog({
+        timestamp: new Date().toLocaleTimeString(),
+        level: 'error',
+        message: `Failed to generate ${endpoint.path}: ${error}`
       })
       updateEndpoint(endpoint.id, { generating: false })
     }
@@ -43,20 +43,32 @@ export function MockFactory() {
   const generateAllEndpoints = async () => {
     clearLogs()
     addLog({ timestamp: new Date().toLocaleTimeString(), level: 'info', message: 'Starting batch generation...' })
-    
+
     try {
       const result = await apiGenerateAll()
-      addLog({ 
-        timestamp: new Date().toLocaleTimeString(), 
-        level: 'success', 
-        message: `Generated ${result.generated_count} endpoints!` 
+      addLog({
+        timestamp: new Date().toLocaleTimeString(),
+        level: 'success',
+        message: `Generated ${result.generated_count}/${result.total_attempted} endpoints!`
       })
-      
-      // Refresh endpoints from backend
-      const { getEndpoints } = await import('@/lib/api')
-      const endpointsData = await getEndpoints()
-      // Update store...
-      
+
+      try {
+        const endpointsData = await getEndpoints()
+        const backendEndpoints = endpointsData.endpoints || []
+        for (const ep of backendEndpoints) {
+          const existing = endpoints.find(e => e.id === ep.id)
+          if (existing) {
+            updateEndpoint(ep.id, { generated: ep.generated || false })
+          }
+        }
+      } catch {
+        addLog({
+          timestamp: new Date().toLocaleTimeString(),
+          level: 'info',
+          message: 'Backend refresh skipped'
+        })
+      }
+
     } catch (error) {
       addLog({ timestamp: new Date().toLocaleTimeString(), level: 'error', message: String(error) })
     }
@@ -75,16 +87,15 @@ export function MockFactory() {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      {/* Endpoints Table */}
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         <div className="p-4 border-b border-border flex items-center justify-between">
           <h3 className="font-semibold flex items-center gap-2">
             <Zap className="w-5 h-5 text-primary" />
             Detected Endpoints ({endpoints.length})
           </h3>
-          <Button 
-            size="sm" 
-            onClick={generateAllEndpoints} 
+          <Button
+            size="sm"
+            onClick={generateAllEndpoints}
             disabled={endpoints.filter(e => !e.generated).length === 0}
           >
             Generate All
@@ -105,7 +116,7 @@ export function MockFactory() {
                   </span>
                   <span className="font-mono text-sm">{endpoint.path}</span>
                 </div>
-                
+
                 <div className="flex items-center gap-2">
                   {endpoint.generated ? (
                     <div className="flex items-center gap-2 text-green-500">
@@ -138,7 +149,6 @@ export function MockFactory() {
         </div>
       </div>
 
-      {/* Terminal Logs */}
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         <div className="p-4 border-b border-border flex items-center justify-between">
           <h3 className="font-semibold flex items-center gap-2">
@@ -150,7 +160,7 @@ export function MockFactory() {
           </Button>
         </div>
 
-        <div 
+        <div
           ref={terminalRef}
           className="h-96 overflow-y-auto bg-black/50 p-4 font-mono text-sm"
         >

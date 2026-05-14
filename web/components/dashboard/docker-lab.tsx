@@ -51,12 +51,10 @@ export function DockerLab() {
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 
   useEffect(() => {
-    // Simulate loading containers
-    setLoading(true)
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       setContainers(mockContainers)
-      setLoading(false)
     }, 1000)
+    return () => clearTimeout(timer)
   }, [setContainers])
 
   const refreshContainers = () => {

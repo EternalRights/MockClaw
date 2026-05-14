@@ -24,6 +24,26 @@
 }
 
 :root {
+  --background: 0 0% 100%;
+  --foreground: 240 10% 3.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 10% 3.9%;
+  --primary: 239 84% 67%;
+  --primary-foreground: 0 0% 98%;
+  --secondary: 240 4.8% 95.9%;
+  --secondary-foreground: 240 5.9% 10%;
+  --muted: 240 4.8% 95.9%;
+  --muted-foreground: 240 3.8% 46.1%;
+  --accent: 240 4.8% 95.9%;
+  --accent-foreground: 240 5.9% 10%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 240 5.9% 90%;
+  --input: 240 5.9% 90%;
+  --ring: 239 84% 67%;
+}
+
+.dark {
   --background: 240 10% 3.9%;
   --foreground: 0 0% 98%;
   --card: 240 10% 3.9%;
@@ -52,7 +72,6 @@ body {
   font-feature-settings: "rlig" 1, "calt" 1;
 }
 
-/* Scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -71,7 +90,6 @@ body {
   background: hsl(var(--muted-foreground));
 }
 
-/* Matrix rain animation */
 @keyframes matrix-rain {
   0% {
     transform: translateY(-100%);
@@ -93,7 +111,6 @@ body {
   animation: matrix-rain linear infinite;
 }
 
-/* Claw closing animation */
 @keyframes claw-close {
   0% { transform: rotate(0deg) translateY(0); }
   25% { transform: rotate(-15deg) translateY(-20px); }
@@ -106,7 +123,6 @@ body {
   animation: claw-close 0.8s ease-in-out;
 }
 
-/* Pulse glow */
 @keyframes pulse-glow {
   0%, 100% {
     box-shadow: 0 0 20px rgba(99, 102, 241, 0.3);
@@ -120,7 +136,6 @@ body {
   animation: pulse-glow 2s ease-in-out infinite;
 }
 
-/* Terminal cursor blink */
 @keyframes cursor-blink {
   0%, 50% { opacity: 1; }
   51%, 100% { opacity: 0; }
@@ -130,7 +145,6 @@ body {
   animation: cursor-blink 1s step-end infinite;
 }
 
-/* Gradient text */
 .gradient-text {
   background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #ec4899 100%);
   -webkit-background-clip: text;

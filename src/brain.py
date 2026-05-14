@@ -8,6 +8,7 @@ import sys
 import json
 import tempfile
 import time
+import asyncio
 from pathlib import Path
 from typing import Any
 from contextlib import asynccontextmanager
@@ -17,7 +18,7 @@ import logging
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
@@ -32,15 +33,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from core.parser import HARParser
 from core.generator import MockGenerator
+from _version import get_version
 
-try:
-    from importlib.metadata import version as _pkg_version
-    APP_VERSION = _pkg_version("mockclaw")
-except Exception:
-    import re as _re
-    _init = Path(__file__).parent / "__init__.py"
-    _m = _re.search(r'^__version__\s*=\s*["\']([^"\']+)', _init.read_text(encoding="utf-8"), _re.MULTILINE)
-    APP_VERSION = _m.group(1) if _m else "0.2.0"
+APP_VERSION = get_version()
 START_TIME = time.time()
 
 
@@ -135,6 +130,16 @@ def check_services() -> dict[str, str]:
     return services
 
 
+def _add_log(level: str, message: str) -> None:
+    generation_logs.append({
+        "timestamp": datetime.now().isoformat(),
+        "level": level,
+        "message": message,
+    })
+    if len(generation_logs) > _MAX_LOG_ENTRIES:
+        generation_logs[:] = generation_logs[-_MAX_LOG_ENTRIES:]
+
+
 @app.exception_handler(json.JSONDecodeError)
 async def json_decode_error(request: Request, exc: json.JSONDecodeError):
     logger.error(f"JSON decode error: {exc}")
@@ -184,6 +189,9 @@ async def parse_har_file(file: UploadFile = File(...)):
     content = await file.read()
     if len(content) > 50 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File too large (max 50MB)")
+
+    if len(content) == 0:
+        raise HTTPException(status_code=400, detail="File is empty")
 
     try:
         json.loads(content.decode("utf-8"))
@@ -247,26 +255,18 @@ async def generate_mock(request: GenerateRequest):
             "message": "Endpoint already generated"
         }
 
-    logs = [
-        {"timestamp": datetime.now().isoformat(), "level": "info",
-         "message": f"Starting generation for {endpoint['method']} {endpoint['resource_path']}"},
-        {"timestamp": datetime.now().isoformat(), "level": "info",
-         "message": "Generating mock code..."},
-    ]
+    _add_log("info", f"Starting generation for {endpoint['method']} {endpoint['resource_path']}")
 
     result = None
     try:
-        result = _generator.generate_endpoint(endpoint)
+        result = await asyncio.to_thread(_generator.generate_endpoint, endpoint)
 
         if result.success:
-            logs.append({"timestamp": datetime.now().isoformat(), "level": "success",
-                         "message": f"Generated mock for {endpoint['method']} {endpoint['resource_path']}"})
+            _add_log("success", f"Generated mock for {endpoint['method']} {endpoint['resource_path']}")
         else:
-            logs.append({"timestamp": datetime.now().isoformat(), "level": "error",
-                         "message": f"Generation failed: {result.error}"})
+            _add_log("error", f"Generation failed: {result.error}")
     except Exception as e:
-        logs.append({"timestamp": datetime.now().isoformat(), "level": "error",
-                     "message": f"Generation error: {e}"})
+        _add_log("error", f"Generation error: {e}")
 
     succeeded = result is not None and result.success
     if succeeded:
@@ -274,24 +274,20 @@ async def generate_mock(request: GenerateRequest):
         generated_endpoints[endpoint_id]["generated_at"] = datetime.now().isoformat()
         generated_endpoints[endpoint_id]["generated_code"] = result.generated_code
 
-    generation_logs.extend(logs)
-    if len(generation_logs) > _MAX_LOG_ENTRIES:
-        generation_logs[:] = generation_logs[-_MAX_LOG_ENTRIES:]
-
     logger.info(f"Generated mock for endpoint: {endpoint_id} (success={succeeded})")
 
     return {
         "success": succeeded,
         "endpoint_id": endpoint_id,
         "cached": False,
-        "logs": logs,
+        "logs": generation_logs[-5:],
         "generated_code": result.generated_code if succeeded else None,
         "error": result.error if result and not result.success else None,
     }
 
 
 @app.get("/logs", tags=["System"])
-async def get_logs(limit: int = 100):
+async def get_logs(limit: int = Query(default=100, ge=1, le=1000)):
     return {"logs": generation_logs[-limit:]}
 
 
@@ -303,10 +299,17 @@ async def clear_logs():
 
 
 @app.get("/endpoints", tags=["Endpoints"])
-async def list_endpoints():
+async def list_endpoints(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
+    items = list(generated_endpoints.values())
+    total = len(items)
     return {
-        "total": len(generated_endpoints),
-        "endpoints": list(generated_endpoints.values())
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "endpoints": items[offset:offset + limit]
     }
 
 
@@ -323,21 +326,48 @@ async def delete_endpoint(endpoint_id: str):
 
 @app.post("/generate-all", tags=["Generation"])
 async def generate_all_endpoints():
-    results = []
+    pending = [
+        (eid, ep) for eid, ep in generated_endpoints.items()
+        if not ep.get("generated")
+    ]
 
-    for endpoint_id, endpoint in generated_endpoints.items():
-        if not endpoint.get("generated"):
-            result = await generate_mock(GenerateRequest(endpoint_id=endpoint_id))
-            results.append(result)
+    if not pending:
+        return {
+            "success": True,
+            "generated_count": 0,
+            "total_attempted": 0,
+            "message": "All endpoints already generated"
+        }
 
-    successful = sum(1 for r in results if isinstance(r, dict) and r.get("success"))
+    _add_log("info", f"Starting batch generation for {len(pending)} endpoints")
 
-    logger.info(f"Batch generation complete: {successful}/{len(results)}")
+    tasks = [
+        asyncio.to_thread(_generator.generate_endpoint, ep)
+        for _, ep in pending
+    ]
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    successful = 0
+    for (endpoint_id, endpoint), result in zip(pending, results):
+        if isinstance(result, Exception):
+            _add_log("error", f"Generation error for {endpoint_id}: {result}")
+            continue
+        if result.success:
+            successful += 1
+            generated_endpoints[endpoint_id]["generated"] = True
+            generated_endpoints[endpoint_id]["generated_at"] = datetime.now().isoformat()
+            generated_endpoints[endpoint_id]["generated_code"] = result.generated_code
+            _add_log("success", f"Generated {endpoint['method']} {endpoint['resource_path']}")
+        else:
+            _add_log("error", f"Failed {endpoint['method']} {endpoint['resource_path']}: {result.error}")
+
+    logger.info(f"Batch generation complete: {successful}/{len(pending)}")
 
     return {
         "success": True,
         "generated_count": successful,
-        "total_attempted": len(results)
+        "total_attempted": len(pending)
     }
 
 

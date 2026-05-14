@@ -5,6 +5,7 @@ Strategy pattern for mock endpoint code generation.
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -22,11 +23,16 @@ class GenerationStrategy(ABC):
         """Generate FastAPI route code for a single endpoint."""
         ...
 
+    async def generate_async(self, endpoint_data: dict[str, Any]) -> str:
+        """Async variant of generate -- defaults to sync in executor."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.generate, endpoint_data)
+
     @staticmethod
     def _extract_common(
         endpoint_data: dict[str, Any],
-    ) -> tuple[str, str, list[dict[str, Any]]]:
-        """Extract method, path, and normalised responses from endpoint data.
+    ) -> tuple[str, str, list[dict[str, Any]], dict[str, Any]]:
+        """Extract method, path, normalised responses, and sample request.
 
         Handles the common pre-processing shared by template and smart-routing
         strategies: pulling out method/path, collecting all responses, and
@@ -34,7 +40,8 @@ class GenerationStrategy(ABC):
         responses don't carry their own.
 
         Returns:
-            ``(method, path, all_responses)`` ready for :func:`build_route`.
+            ``(method, path, all_responses, sample_request)`` ready for
+            :func:`build_route`.
         """
         method = endpoint_data["method"]
         path = endpoint_data["resource_path"]
@@ -60,7 +67,7 @@ class GenerationStrategy(ABC):
                     for resp in all_responses
                 ]
 
-        return method, path, all_responses
+        return method, path, all_responses, sample_request
 
 
 class LLMGenerationStrategy(GenerationStrategy):
@@ -92,7 +99,8 @@ class LLMGenerationStrategy(GenerationStrategy):
             raise RuntimeError("LLM client not available and no fallback configured")
 
         try:
-            response = client.chat.completions.create(
+            response = self._client_manager.call_with_retry(
+                client.chat.completions.create,
                 model=self._model,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
@@ -109,6 +117,10 @@ class LLMGenerationStrategy(GenerationStrategy):
                 return self._fallback.generate(endpoint_data)
             raise RuntimeError("LLM generation failed and no fallback configured")
 
+    async def generate_async(self, endpoint_data: dict[str, Any]) -> str:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.generate, endpoint_data)
+
 
 class TemplateGenerationStrategy(GenerationStrategy):
     """Generate endpoints using template-based fallback.
@@ -118,7 +130,7 @@ class TemplateGenerationStrategy(GenerationStrategy):
     """
 
     def generate(self, endpoint_data: dict[str, Any]) -> str:
-        method, path, all_responses = self._extract_common(endpoint_data)
+        method, path, all_responses, sample_request = self._extract_common(endpoint_data)
         func_name = generate_func_name(method, path)
         return build_route(
             method,
@@ -126,6 +138,7 @@ class TemplateGenerationStrategy(GenerationStrategy):
             all_responses,
             func_name,
             use_smart_fallback=False,
+            sample_request=sample_request,
         )
 
 
@@ -138,7 +151,7 @@ class SmartRoutingStrategy(GenerationStrategy):
     """
 
     def generate(self, endpoint_data: dict[str, Any]) -> str:
-        method, path, all_responses = self._extract_common(endpoint_data)
+        method, path, all_responses, sample_request = self._extract_common(endpoint_data)
         func_name = generate_func_name(method, path)
         return build_route(
             method,
@@ -146,4 +159,5 @@ class SmartRoutingStrategy(GenerationStrategy):
             all_responses,
             func_name,
             use_smart_fallback=True,
+            sample_request=sample_request,
         )

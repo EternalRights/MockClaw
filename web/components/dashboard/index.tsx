@@ -1,7 +1,7 @@
 "use client"
 
-import { useEffect, useState } from 'react'
-import { Moon, Sun, Box, AlertCircle, RefreshCw, Zap, ExternalLink } from 'lucide-react'
+import { useEffect, useSyncExternalStore } from 'react'
+import { Moon, Sun, Box, Zap } from 'lucide-react'
 
 // GitHub icon component
 function GithubIcon({ className }: { className?: string }) {
@@ -14,7 +14,7 @@ function GithubIcon({ className }: { className?: string }) {
 import { motion } from 'framer-motion'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { useStore } from '@/lib/store'
 import { TrafficDropzone } from './traffic-dropzone'
@@ -43,11 +43,18 @@ function ClawLogo({ className }: { className?: string }) {
 
 export function Dashboard() {
   const { theme, setTheme, isProcessing } = useStore()
-  const [mounted, setMounted] = useState(false)
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  )
 
   useEffect(() => {
-    setMounted(true)
-    document.documentElement.classList.toggle('dark', theme === 'dark')
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark')
+    } else {
+      document.documentElement.classList.remove('dark')
+    }
   }, [theme])
 
   const toggleTheme = () => {

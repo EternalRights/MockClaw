@@ -1,159 +1,142 @@
 "use client"
 
-import { useState, useEffect } from 'react'
-import { BookOpen, Play, Loader2, Copy, Check } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { BookOpen, Play, Loader2, Copy, Check, AlertCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { useStore } from '@/lib/store'
+import { getEndpoints, healthCheck } from '@/lib/api'
 
-// Mock OpenAPI spec
-const mockSpec = {
-  openapi: '3.0.0',
-  info: {
-    title: 'MockClaw Generated API',
-    version: '0.1.0',
-    description: 'Auto-generated mock API endpoints',
-  },
-  servers: [{ url: 'http://localhost:4000' }],
-  paths: {
-    '/health': {
-      get: {
-        summary: 'Health Check',
-        responses: {
-          '200': {
-            description: 'Service is healthy',
-            content: {
-              'application/json': {
-                example: { status: 'OK', service: 'MockClaw' },
-              },
-            },
-          },
-        },
-      },
-    },
-    '/mockclaw/info': {
-      get: {
-        summary: 'Get MockClaw Info',
-        responses: {
-          '200': {
-            description: 'MockClaw metadata',
-            content: {
-              'application/json': {
-                example: {
-                  generator: 'MockClaw',
-                  version: '0.1.0',
-                  endpoints: [],
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-    '/api/login': {
-      post: {
-        summary: 'User Login',
-        requestBody: {
-          required: true,
-          content: {
-            'application/json': {
-              schema: {
-                type: 'object',
-                properties: {
-                  username: { type: 'string' },
-                  password: { type: 'string' },
-                },
-              },
-              example: { username: 'testuser', password: 'secret123' },
-            },
-          },
-        },
-        responses: {
-          '200': {
-            description: 'Login successful',
-            content: {
-              'application/json': {
-                example: {
-                  token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
-                  user: { id: 1, username: 'testuser', email: 'test@example.com' },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-    '/api/users/{id}': {
-      get: {
-        summary: 'Get User by ID',
-        parameters: [
-          {
-            name: 'id',
-            in: 'path',
-            required: true,
-            schema: { type: 'integer' },
-            example: 123,
-          },
-        ],
-        responses: {
-          '200': {
-            description: 'User data',
-            content: {
-              'application/json': {
-                example: {
-                  id: 123,
-                  name: 'John Doe',
-                  email: 'john@example.com',
-                  profile: { bio: 'Software Engineer' },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-  },
+interface ApiEndpoint {
+  id: string
+  path: string
+  method: string
+  status: number
+  generated: boolean
+  generated_code?: string
+  sample_request?: {
+    url: string
+    headers: Record<string, string>
+    body: string | null
+    query_params: Record<string, string>
+  }
+  sample_responses?: Array<{
+    status: number
+    body: string | null
+    content_type: string | null
+  }>
 }
 
 export function ApiDocs() {
-  const [selectedEndpoint, setSelectedEndpoint] = useState<string>('/health')
+  const { endpoints } = useStore()
+  const [selectedEndpoint, setSelectedEndpoint] = useState<string | null>(null)
   const [requestBody, setRequestBody] = useState('')
-  const [response, setResponse] = useState<any>(null)
+  const [response, setResponse] = useState<{ status: number; data: unknown; time: number } | null>(null)
   const [loading, setLoading] = useState(false)
   const [copied, setCopied] = useState(false)
-
-  const endpoints = Object.entries(mockSpec.paths)
-  const currentEndpoint = endpoints.find(([path]) => path === selectedEndpoint)
+  const [backendEndpoints, setBackendEndpoints] = useState<ApiEndpoint[]>([])
+  const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking')
 
   useEffect(() => {
-    if (currentEndpoint) {
-      const [, methods] = currentEndpoint
-      const method = Object.values(methods)[0] as any
-      if (method.requestBody?.content?.['application/json']?.example) {
-        setRequestBody(JSON.stringify(method.requestBody.content['application/json'].example, null, 2))
-      } else if (method.responses?.['200']?.content?.['application/json']?.example) {
-        setRequestBody('')
+    const check = async () => {
+      const isHealthy = await healthCheck()
+      setBackendStatus(isHealthy ? 'online' : 'offline')
+      if (isHealthy) {
+        try {
+          const data = await getEndpoints()
+          setBackendEndpoints(data.endpoints || [])
+        } catch {
+          setBackendEndpoints([])
+        }
       }
     }
+    check()
+  }, [endpoints])
+
+  const displayEndpoints = backendEndpoints.length > 0 ? backendEndpoints : endpoints.map(ep => ({
+    id: ep.id,
+    path: ep.path,
+    method: ep.method,
+    status: ep.status,
+    generated: ep.generated,
+  }))
+
+  const currentEndpoint = displayEndpoints.find(ep => ep.id === selectedEndpoint)
+
+  useEffect(() => {
+    const ep = displayEndpoints.find(e => e.id === selectedEndpoint) as ApiEndpoint | undefined
+    if (!ep) return
+    if (ep.sample_request?.body) {
+      try {
+        const parsed = JSON.parse(ep.sample_request.body)
+        setRequestBody(JSON.stringify(parsed, null, 2))
+      } catch {
+        setRequestBody(ep.sample_request.body)
+      }
+    } else {
+      setRequestBody('')
+    }
+    setResponse(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedEndpoint])
 
-  const sendRequest = async () => {
+  const sendRequest = useCallback(async () => {
+    if (!currentEndpoint) return
     setLoading(true)
     setResponse(null)
 
-    // Simulate request
-    await new Promise(resolve => setTimeout(resolve, 1500))
+    const ep = currentEndpoint as ApiEndpoint
+    const startTime = performance.now()
 
-    const method = Object.values(currentEndpoint![1])[0] as any
-    const exampleResponse = method.responses?.['200']?.content?.['application/json']?.example
-
-    setResponse({
-      status: 200,
-      data: exampleResponse,
-      time: Math.floor(Math.random() * 500) + 100,
-    })
-
-    setLoading(false)
-  }
+    try {
+      if (backendStatus === 'online') {
+        const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+        const fetchOptions: RequestInit = {
+          method: ep.method,
+          headers: { 'Content-Type': 'application/json' },
+        }
+        if (['POST', 'PUT', 'PATCH'].includes(ep.method) && requestBody) {
+          fetchOptions.body = requestBody
+        }
+        const res = await fetch(`${apiBase}${ep.path}`, fetchOptions)
+        const elapsed = Math.round(performance.now() - startTime)
+        let data: unknown
+        const text = await res.text()
+        try {
+          data = JSON.parse(text)
+        } catch {
+          data = text
+        }
+        setResponse({ status: res.status, data, time: elapsed })
+      } else {
+        await new Promise(resolve => setTimeout(resolve, 800))
+        const sampleResp = ep.sample_responses?.[0]
+        const elapsed = Math.round(performance.now() - startTime)
+        let data: unknown = {}
+        if (sampleResp?.body) {
+          try {
+            data = JSON.parse(sampleResp.body)
+          } catch {
+            data = sampleResp.body
+          }
+        }
+        setResponse({
+          status: sampleResp?.status || 200,
+          data,
+          time: elapsed,
+        })
+      }
+    } catch (error) {
+      const elapsed = Math.round(performance.now() - startTime)
+      setResponse({
+        status: 0,
+        data: { error: String(error) },
+        time: elapsed,
+      })
+    } finally {
+      setLoading(false)
+    }
+  }, [currentEndpoint, requestBody, backendStatus])
 
   const copyResponse = () => {
     navigator.clipboard.writeText(JSON.stringify(response?.data, null, 2))
@@ -161,51 +144,70 @@ export function ApiDocs() {
     setTimeout(() => setCopied(false), 2000)
   }
 
+  const getMethodColor = (method: string) => {
+    switch (method.toUpperCase()) {
+      case 'GET': return 'bg-green-500/20 text-green-400'
+      case 'POST': return 'bg-blue-500/20 text-blue-400'
+      case 'PUT': return 'bg-yellow-500/20 text-yellow-400'
+      case 'DELETE': return 'bg-red-500/20 text-red-400'
+      case 'PATCH': return 'bg-purple-500/20 text-purple-400'
+      default: return 'bg-gray-500/20 text-gray-400'
+    }
+  }
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      {/* Endpoints List */}
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         <div className="p-4 border-b border-border">
           <h3 className="font-semibold flex items-center gap-2">
             <BookOpen className="w-5 h-5 text-primary" />
             API Endpoints
+            {backendStatus === 'online' && (
+              <span className="text-xs text-green-500 ml-auto">Live</span>
+            )}
           </h3>
         </div>
 
         <div className="divide-y divide-border max-h-[600px] overflow-y-auto">
-          {endpoints.map(([path, methods]) => {
-            const [method, details] = Object.entries(methods)[0] as [string, any]
-            return (
+          {displayEndpoints.length === 0 ? (
+            <div className="p-8 text-center text-muted-foreground">
+              {backendStatus === 'offline' ? (
+                <div className="flex flex-col items-center gap-2">
+                  <AlertCircle className="w-8 h-8 text-yellow-500" />
+                  <span>Backend offline</span>
+                  <span className="text-xs">Start brain.py to see live endpoints</span>
+                </div>
+              ) : (
+                'No endpoints detected. Upload a HAR file first.'
+              )}
+            </div>
+          ) : (
+            displayEndpoints.map((ep) => (
               <button
-                key={path}
+                key={ep.id}
                 className={cn(
                   "w-full p-4 text-left hover:bg-accent/50 transition-colors",
-                  selectedEndpoint === path && "bg-primary/10 border-l-2 border-primary"
+                  selectedEndpoint === ep.id && "bg-primary/10 border-l-2 border-primary"
                 )}
-                onClick={() => setSelectedEndpoint(path)}
+                onClick={() => setSelectedEndpoint(ep.id)}
               >
                 <div className="flex items-center gap-2 mb-1">
-                  <span className={cn(
-                    "px-2 py-0.5 rounded text-xs font-bold",
-                    method === 'GET' && "bg-green-500/20 text-green-400",
-                    method === 'POST' && "bg-blue-500/20 text-blue-400",
-                    method === 'PUT' && "bg-yellow-500/20 text-yellow-400",
-                    method === 'DELETE' && "bg-red-500/20 text-red-400",
-                  )}>
-                    {method}
+                  <span className={cn("px-2 py-0.5 rounded text-xs font-bold", getMethodColor(ep.method))}>
+                    {ep.method}
                   </span>
+                  {ep.generated && (
+                    <span className="w-2 h-2 bg-green-500 rounded-full" />
+                  )}
                 </div>
-                <p className="font-mono text-sm">{path}</p>
-                <p className="text-xs text-muted-foreground mt-1">{details.summary}</p>
+                <p className="font-mono text-sm">{ep.path}</p>
+                <p className="text-xs text-muted-foreground mt-1">Status: {ep.status}</p>
               </button>
-            )
-          })}
+            ))
+          )}
         </div>
       </div>
 
-      {/* Request/Response Panel */}
       <div className="lg:col-span-2 space-y-4">
-        {/* Endpoint Details */}
         {currentEndpoint && (
           <div className="bg-card rounded-xl border border-border p-6">
             <div className="flex items-center justify-between mb-4">
@@ -213,20 +215,14 @@ export function ApiDocs() {
             </div>
 
             <div className="space-y-4">
-              {/* Method & Path */}
               <div className="flex items-center gap-4 p-4 bg-accent/50 rounded-lg">
-                <span className={cn(
-                  "px-3 py-1 rounded font-bold",
-                  Object.keys(currentEndpoint[1])[0] === 'GET' && "bg-green-500/20 text-green-400",
-                  Object.keys(currentEndpoint[1])[0] === 'POST' && "bg-blue-500/20 text-blue-400",
-                )}>
-                  {Object.keys(currentEndpoint[1])[0]}
+                <span className={cn("px-3 py-1 rounded font-bold", getMethodColor(currentEndpoint.method))}>
+                  {currentEndpoint.method}
                 </span>
-                <code className="font-mono">{selectedEndpoint}</code>
+                <code className="font-mono">{currentEndpoint.path}</code>
               </div>
 
-              {/* Request Body (if applicable) */}
-              {Object.values(currentEndpoint[1])[0]?.requestBody && (
+              {['POST', 'PUT', 'PATCH'].includes(currentEndpoint.method) && (
                 <div>
                   <label className="block text-sm font-medium mb-2">Request Body</label>
                   <textarea
@@ -238,9 +234,8 @@ export function ApiDocs() {
                 </div>
               )}
 
-              {/* Send Button */}
-              <Button 
-                className="w-full" 
+              <Button
+                className="w-full"
                 onClick={sendRequest}
                 disabled={loading}
               >
@@ -260,7 +255,6 @@ export function ApiDocs() {
           </div>
         )}
 
-        {/* Response */}
         {response && (
           <div className="bg-card rounded-xl border border-border p-6">
             <div className="flex items-center justify-between mb-4">
@@ -268,10 +262,11 @@ export function ApiDocs() {
                 <h3 className="font-semibold">Response</h3>
                 <span className={cn(
                   "px-2 py-0.5 rounded text-sm",
-                  response.status === 200 && "bg-green-500/20 text-green-400",
+                  response.status >= 200 && response.status < 300 && "bg-green-500/20 text-green-400",
                   response.status >= 400 && "bg-red-500/20 text-red-400",
+                  response.status === 0 && "bg-red-500/20 text-red-400",
                 )}>
-                  {response.status}
+                  {response.status === 0 ? 'Error' : response.status}
                 </span>
                 <span className="text-sm text-muted-foreground">{response.time}ms</span>
               </div>

@@ -24,15 +24,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from core.parser import HARParser
 from core.generator import MockGenerator
+from _version import get_version
 
-try:
-    from importlib.metadata import version as _pkg_version
-    __version__ = _pkg_version("mockclaw")
-except Exception:
-    import re as _re
-    _init = Path(__file__).parent / "__init__.py"
-    _m = _re.search(r'^__version__\s*=\s*["\']([^"\']+)', _init.read_text(encoding="utf-8"), _re.MULTILINE)
-    __version__ = _m.group(1) if _m else "0.2.0"
+__version__ = get_version()
 
 console = Console()
 
