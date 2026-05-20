@@ -3,6 +3,7 @@ MockClaw Traffic Parser
 Parses HAR files and extracts API endpoints for mock generation.
 """
 
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,14 +12,16 @@ from urllib.parse import urlparse
 import json
 
 
-STATIC_MIME_TYPES = {
+STATIC_MIME_PREFIXES = (
     'image/', 'css/', 'font/', 'application/javascript',
     'application/x-javascript', 'text/css', 'text/javascript',
     'text/html', 'video/', 'audio/'
-}
+)
 
-STATIC_URL_PATTERNS = ['.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.svg',
-                       '.ico', '.woff', '.woff2', '.ttf', '.eot', '.webp']
+STATIC_URL_EXTENSIONS = frozenset([
+    '.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.svg',
+    '.ico', '.woff', '.woff2', '.ttf', '.eot', '.webp'
+])
 
 UUID_PATTERN = re.compile(r'/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.IGNORECASE)
 ID_PATTERN = re.compile(r'/[0-9]+(?=/|$)')
@@ -77,16 +80,16 @@ class HARParser:
         request = entry.get('request', {})
         url = request.get('url', '')
 
-        for pattern in STATIC_URL_PATTERNS:
-            if url.lower().endswith(pattern):
-                return True
+        _, ext = os.path.splitext(url.lower())
+        if ext in STATIC_URL_EXTENSIONS:
+            return True
 
         response = entry.get('response', {})
         content = response.get('content', {})
         mime_type = content.get('mimeType', '').lower()
 
-        for static_prefix in STATIC_MIME_TYPES:
-            if mime_type.startswith(static_prefix):
+        for prefix in STATIC_MIME_PREFIXES:
+            if mime_type.startswith(prefix):
                 return True
 
         return False

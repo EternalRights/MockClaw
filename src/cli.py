@@ -394,9 +394,9 @@ def serve(
         console.print("\n[yellow]Please generate mocks first:[/yellow]")
         console.print(f"  [cyan]mockclaw generate examples/sample.har {mock_dir} --smart-fallback[/cyan]")
         raise typer.Exit(1)
-    
-    mock_path_obj = Path(mock_dir).resolve()
-    module_path = f"{mock_path_obj.name}.dynamic_api:app"
+
+    mock_dir_resolved = Path(mock_dir).resolve()
+    module_path = f"{mock_dir_resolved.name}.dynamic_api:app"
 
     console.print(f"\n[bold cyan]🚀 Starting mock server...[/bold cyan]")
     
@@ -434,7 +434,7 @@ def serve(
     console.print(f"\n[dim]Press Ctrl+C to stop[/dim]\n")
     
     try:
-        parent_dir = str(mock_path_obj.parent)
+        parent_dir = str(mock_dir_resolved.parent)
         if parent_dir not in sys.path:
             sys.path.insert(0, parent_dir)
         uvicorn.run(

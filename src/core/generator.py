@@ -5,6 +5,7 @@ Generates FastAPI mock endpoints from parsed HAR data.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,8 @@ from .generation_strategy import (
 from .llm_client_manager import LLMClientManager
 from .prompt_builder import PromptBuilder
 from _version import get_version
+
+logger = logging.getLogger(__name__)
 
 _VERSION = get_version()
 
@@ -179,19 +182,56 @@ class MockGenerator:
     ) -> GenerationResult:
         """Generate a single mock endpoint."""
         try:
+            self._validate_endpoint_data(endpoint_data)
+
+            logger.debug(
+                "Generating endpoint: %s %s",
+                endpoint_data.get("method", "UNKNOWN"),
+                endpoint_data.get("resource_path", "UNKNOWN"),
+            )
             code = self._strategy.generate(endpoint_data)
+            logger.debug(
+                "Successfully generated: %s %s",
+                endpoint_data.get("method", "UNKNOWN"),
+                endpoint_data.get("resource_path", "UNKNOWN"),
+            )
             return GenerationResult(
                 success=True,
                 generated_code=code,
                 endpoint_path=endpoint_data["resource_path"],
             )
         except Exception as e:
+            logger.error(
+                "Failed to generate %s %s: %s",
+                endpoint_data.get("method", "UNKNOWN") if isinstance(endpoint_data, dict) else "N/A",
+                endpoint_data.get("resource_path", "UNKNOWN") if isinstance(endpoint_data, dict) else "N/A",
+                str(e),
+            )
             return GenerationResult(
                 success=False,
                 generated_code="",
-                endpoint_path=endpoint_data.get("resource_path", "unknown"),
+                endpoint_path=endpoint_data.get("resource_path", "unknown") if isinstance(endpoint_data, dict) else "unknown",
                 error=str(e),
             )
+
+    @staticmethod
+    def _validate_endpoint_data(endpoint_data: dict[str, Any]) -> None:
+        """Validate endpoint data has required fields.
+
+        Raises:
+            ValueError: If required fields are missing or invalid.
+        """
+        if not isinstance(endpoint_data, dict):
+            raise ValueError(f"Expected dict for endpoint_data, got {type(endpoint_data).__name__}")
+
+        if "resource_path" not in endpoint_data:
+            raise ValueError("endpoint_data missing required field: 'resource_path'")
+
+        if "method" not in endpoint_data:
+            raise ValueError("endpoint_data missing required field: 'method'")
+
+        if not isinstance(endpoint_data["method"], str) or not endpoint_data["method"].strip():
+            raise ValueError("'method' must be a non-empty string")
 
     def generate_all(
         self,
@@ -206,6 +246,12 @@ class MockGenerator:
             output_dir: Directory to write generated code
             use_smart_fallback: Override instance setting for smart routing
         """
+        if not endpoints:
+            logger.warning("No endpoints provided to generate_all")
+            return []
+
+        logger.info("Starting generation for %d endpoints to %s", len(endpoints), output_dir)
+
         if use_smart_fallback is not None:
             old_setting = self.use_smart_fallback
             self.use_smart_fallback = use_smart_fallback
@@ -219,18 +265,37 @@ class MockGenerator:
         results: list[GenerationResult] = []
         parts: list[str] = [_get_mock_server_header()]
 
+        skipped_count = 0
         for endpoint in endpoints:
-            if endpoint["resource_path"] in self._BUILTIN_PATHS:
+            if endpoint.get("resource_path") in self._BUILTIN_PATHS:
+                skipped_count += 1
                 continue
+
             result = self.generate_endpoint(endpoint)
             results.append(result)
             if result.success:
                 parts.append(f"# {endpoint['method']} {endpoint['resource_path']}")
                 parts.append(result.generated_code)
                 parts.append("")
+            else:
+                logger.warning(
+                    "Failed to generate %s %s: %s",
+                    endpoint.get("method", "?"),
+                    endpoint.get("resource_path", "?"),
+                    result.error,
+                )
 
         (output_path / "dynamic_api.py").write_text(
             "\n".join(parts), encoding="utf-8"
+        )
+
+        successful = sum(1 for r in results if r.success)
+        failed = len(results) - successful
+        logger.info(
+            "Generation complete: %d success, %d failed, %d skipped (builtin paths)",
+            successful,
+            failed,
+            skipped_count,
         )
 
         if old_setting is not None:

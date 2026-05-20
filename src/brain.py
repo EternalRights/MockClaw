@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, field_validator
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname) - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,50 @@ from _version import get_version
 
 APP_VERSION = get_version()
 START_TIME = time.time()
+
+
+class AppState:
+    """Centralized application state management.
+
+    Encapsulates all mutable state that was previously scattered as module-level
+    globals. This improves testability and makes the state lifecycle explicit.
+    """
+
+    def __init__(self) -> None:
+        self.endpoints: dict[str, dict[str, Any]] = {}
+        self.generation_logs: list[dict[str, str]] = []
+        self._max_log_entries: int = 1000
+        self._generator = MockGenerator(use_smart_fallback=True)
+
+    @property
+    def max_log_entries(self) -> int:
+        return self._max_log_entries
+
+    @max_log_entries.setter
+    def max_log_entries(self, value: int) -> None:
+        if value > 0:
+            self._max_log_entries = value
+
+    def add_log(self, level: str, message: str) -> None:
+        self.generation_logs.append({
+            "timestamp": datetime.now().isoformat(),
+            "level": level,
+            "message": message,
+        })
+        if len(self.generation_logs) > self._max_log_entries:
+            self.generation_logs[:] = self.generation_logs[-self._max_log_entries:]
+
+    def get_recent_logs(self, limit: int = 100) -> list[dict[str, str]]:
+        return self.generation_logs[-limit:]
+
+    def clear_logs(self) -> None:
+        self.generation_logs.clear()
+
+    def clear_endpoints(self) -> None:
+        self.endpoints.clear()
+
+
+app_state = AppState()
 
 
 @asynccontextmanager
@@ -67,11 +111,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-generated_endpoints: dict[str, dict[str, Any]] = {}
-generation_logs: list[dict[str, str]] = []
-_MAX_LOG_ENTRIES = 1000
-_generator = MockGenerator(use_smart_fallback=True)
 
 
 class HealthResponse(BaseModel):
@@ -131,13 +170,7 @@ def check_services() -> dict[str, str]:
 
 
 def _add_log(level: str, message: str) -> None:
-    generation_logs.append({
-        "timestamp": datetime.now().isoformat(),
-        "level": level,
-        "message": message,
-    })
-    if len(generation_logs) > _MAX_LOG_ENTRIES:
-        generation_logs[:] = generation_logs[-_MAX_LOG_ENTRIES:]
+    app_state.add_log(level, message)
 
 
 @app.exception_handler(json.JSONDecodeError)
@@ -173,8 +206,8 @@ async def mockclaw_info():
     return {
         "generator": "MockClaw",
         "version": APP_VERSION,
-        "endpoints": list(generated_endpoints.keys()),
-        "total_generated": len([e for e in generated_endpoints.values() if e.get("generated")]),
+        "endpoints": list(app_state.endpoints.keys()),
+        "total_generated": len([e for e in app_state.endpoints.values() if e.get("generated")]),
         "uptime": get_uptime()
     }
 
@@ -206,14 +239,14 @@ async def parse_har_file(file: UploadFile = File(...)):
         parser = HARParser(str(temp_path))
         endpoints_data = parser.export_as_dict()
 
-        generated_endpoints.clear()
+        app_state.clear_endpoints()
 
         result_endpoints = []
         for i, ep_data in enumerate(endpoints_data["endpoints"]):
             endpoint_id = f"ep_{i}"
             ep_data["id"] = endpoint_id
 
-            generated_endpoints[endpoint_id] = ep_data
+            app_state.endpoints[endpoint_id] = ep_data
 
             result_endpoints.append(EndpointInfo(
                 id=endpoint_id,
@@ -242,10 +275,10 @@ async def parse_har_file(file: UploadFile = File(...)):
 async def generate_mock(request: GenerateRequest):
     endpoint_id = request.endpoint_id
 
-    if endpoint_id not in generated_endpoints:
+    if endpoint_id not in app_state.endpoints:
         raise HTTPException(status_code=404, detail=f"Endpoint not found: {endpoint_id}")
 
-    endpoint = generated_endpoints[endpoint_id]
+    endpoint = app_state.endpoints[endpoint_id]
 
     if endpoint.get("generated"):
         return {
@@ -259,7 +292,7 @@ async def generate_mock(request: GenerateRequest):
 
     result = None
     try:
-        result = await asyncio.to_thread(_generator.generate_endpoint, endpoint)
+        result = await asyncio.to_thread(app_state._generator.generate_endpoint, endpoint)
 
         if result.success:
             _add_log("success", f"Generated mock for {endpoint['method']} {endpoint['resource_path']}")
@@ -270,9 +303,9 @@ async def generate_mock(request: GenerateRequest):
 
     succeeded = result is not None and result.success
     if succeeded:
-        generated_endpoints[endpoint_id]["generated"] = True
-        generated_endpoints[endpoint_id]["generated_at"] = datetime.now().isoformat()
-        generated_endpoints[endpoint_id]["generated_code"] = result.generated_code
+        app_state.endpoints[endpoint_id]["generated"] = True
+        app_state.endpoints[endpoint_id]["generated_at"] = datetime.now().isoformat()
+        app_state.endpoints[endpoint_id]["generated_code"] = result.generated_code
 
     logger.info(f"Generated mock for endpoint: {endpoint_id} (success={succeeded})")
 
@@ -280,7 +313,7 @@ async def generate_mock(request: GenerateRequest):
         "success": succeeded,
         "endpoint_id": endpoint_id,
         "cached": False,
-        "logs": generation_logs[-5:],
+        "logs": app_state.get_recent_logs(5),
         "generated_code": result.generated_code if succeeded else None,
         "error": result.error if result and not result.success else None,
     }
@@ -288,12 +321,12 @@ async def generate_mock(request: GenerateRequest):
 
 @app.get("/logs", tags=["System"])
 async def get_logs(limit: int = Query(default=100, ge=1, le=1000)):
-    return {"logs": generation_logs[-limit:]}
+    return {"logs": app_state.get_recent_logs(limit)}
 
 
 @app.delete("/logs", tags=["System"])
 async def clear_logs():
-    generation_logs.clear()
+    app_state.clear_logs()
     logger.info("Logs cleared")
     return {"success": True}
 
@@ -303,7 +336,7 @@ async def list_endpoints(
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
 ):
-    items = list(generated_endpoints.values())
+    items = list(app_state.endpoints.values())
     total = len(items)
     return {
         "total": total,
@@ -315,10 +348,10 @@ async def list_endpoints(
 
 @app.delete("/endpoints/{endpoint_id}", tags=["Endpoints"])
 async def delete_endpoint(endpoint_id: str):
-    if endpoint_id not in generated_endpoints:
+    if endpoint_id not in app_state.endpoints:
         raise HTTPException(status_code=404, detail="Endpoint not found")
 
-    del generated_endpoints[endpoint_id]
+    del app_state.endpoints[endpoint_id]
 
     logger.info(f"Deleted endpoint: {endpoint_id}")
     return {"success": True}
@@ -327,7 +360,7 @@ async def delete_endpoint(endpoint_id: str):
 @app.post("/generate-all", tags=["Generation"])
 async def generate_all_endpoints():
     pending = [
-        (eid, ep) for eid, ep in generated_endpoints.items()
+        (eid, ep) for eid, ep in app_state.endpoints.items()
         if not ep.get("generated")
     ]
 
@@ -342,7 +375,7 @@ async def generate_all_endpoints():
     _add_log("info", f"Starting batch generation for {len(pending)} endpoints")
 
     tasks = [
-        asyncio.to_thread(_generator.generate_endpoint, ep)
+        asyncio.to_thread(app_state._generator.generate_endpoint, ep)
         for _, ep in pending
     ]
 
@@ -355,9 +388,9 @@ async def generate_all_endpoints():
             continue
         if result.success:
             successful += 1
-            generated_endpoints[endpoint_id]["generated"] = True
-            generated_endpoints[endpoint_id]["generated_at"] = datetime.now().isoformat()
-            generated_endpoints[endpoint_id]["generated_code"] = result.generated_code
+            app_state.endpoints[endpoint_id]["generated"] = True
+            app_state.endpoints[endpoint_id]["generated_at"] = datetime.now().isoformat()
+            app_state.endpoints[endpoint_id]["generated_code"] = result.generated_code
             _add_log("success", f"Generated {endpoint['method']} {endpoint['resource_path']}")
         else:
             _add_log("error", f"Failed {endpoint['method']} {endpoint['resource_path']}: {result.error}")
