@@ -150,6 +150,16 @@ class TestInputValidation:
         assert not result.success
         assert "non-empty string" in result.error.lower()
 
+    def test_validate_empty_resource_path(self):
+        generator = MockGenerator()
+        result = generator.generate_endpoint({
+            "resource_path": "",
+            "method": "GET"
+        })
+        assert not result.success
+        assert "resource_path" in result.error.lower()
+        assert "non-empty string" in result.error.lower()
+
     def test_validate_non_dict_input(self):
         generator = MockGenerator()
         result = generator.generate_endpoint("not_a_dict")

@@ -227,6 +227,9 @@ class MockGenerator:
         if "resource_path" not in endpoint_data:
             raise ValueError("endpoint_data missing required field: 'resource_path'")
 
+        if not isinstance(endpoint_data.get("resource_path"), str) or not endpoint_data["resource_path"].strip():
+            raise ValueError("'resource_path' must be a non-empty string")
+
         if "method" not in endpoint_data:
             raise ValueError("endpoint_data missing required field: 'method'")
 
