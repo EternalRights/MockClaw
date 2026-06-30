@@ -7,4 +7,5 @@ directly, providing the same interface as the ``mockclaw`` console script.
 
 from .cli import app
 
-app()
+if __name__ == "__main__":
+    app()
