@@ -1,6 +1,7 @@
 # MockClaw
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://python.org)
+[![PyPI](https://img.shields.io/badge/pypi-v0.2.0-blue.svg)](https://pypi.org/project/mockclaw/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 Turn HAR traffic files into working mock API servers. No manual configuration needed.
@@ -59,11 +60,12 @@ No hardcoded field names. Works with any JSON request body -- coupon codes, user
 
 ## Features
 
-- **Auto conditional routing** -- analyzes request bodies to generate if/elif/else logic
-- **No LLM required** -- works offline with zero API keys
-- **Auto-injected security** -- rate limiting, path traversal protection, error handling
-- **Swagger UI** -- interactive API docs at /docs
-- **LLM-assisted mode** -- optional OpenAI integration for richer mocks
+- **Auto conditional routing** — analyzes request bodies to generate if/elif/else logic
+- **No LLM required** — works offline with zero API keys
+- **Auto-injected security** — rate limiting, path traversal protection, error handling
+- **Swagger UI** — interactive API docs at /docs
+- **LLM-assisted mode** — optional OpenAI integration for richer mocks
+- **Chaos testing** — built-in fault injection to verify service resilience
 
 ## CLI Commands
 
