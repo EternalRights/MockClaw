@@ -80,13 +80,3 @@ def minimal_har_data() -> dict[str, Any]:
     }
 
 
-def pytest_configure(config):
-    config.addinivalue_line(
-        "markers", "integration: mark test as integration test (requires server)"
-    )
-    config.addinivalue_line(
-        "markers", "slow: mark test as slow running"
-    )
-    config.addinivalue_line(
-        "markers", "llm: mark test as requiring LLM API key"
-    )
