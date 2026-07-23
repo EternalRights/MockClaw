@@ -21,8 +21,25 @@ except ImportError:
 _STATUS_EXC = {
     400: "HTTP_400_BAD_REQUEST",
     401: "HTTP_401_UNAUTHORIZED",
+    402: "HTTP_402_PAYMENT_REQUIRED",
     403: "HTTP_403_FORBIDDEN",
     404: "HTTP_404_NOT_FOUND",
+    405: "HTTP_405_METHOD_NOT_ALLOWED",
+    406: "HTTP_406_NOT_ACCEPTABLE",
+    408: "HTTP_408_REQUEST_TIMEOUT",
+    409: "HTTP_409_CONFLICT",
+    410: "HTTP_410_GONE",
+    411: "HTTP_411_LENGTH_REQUIRED",
+    412: "HTTP_412_PRECONDITION_FAILED",
+    413: "HTTP_413_REQUEST_ENTITY_TOO_LARGE",
+    415: "HTTP_415_UNSUPPORTED_MEDIA_TYPE",
+    422: "HTTP_422_UNPROCESSABLE_ENTITY",
+    429: "HTTP_429_TOO_MANY_REQUESTS",
+    500: "HTTP_500_INTERNAL_SERVER_ERROR",
+    501: "HTTP_501_NOT_IMPLEMENTED",
+    502: "HTTP_502_BAD_GATEWAY",
+    503: "HTTP_503_SERVICE_UNAVAILABLE",
+    504: "HTTP_504_GATEWAY_TIMEOUT",
 }
 
 _FB = "    "
@@ -259,21 +276,16 @@ def _generate_query_route(
     body0 = body_literal(all_responses[0].get("body") or "{}")
 
     if len(all_responses) > 1:
-        for i, resp in enumerate(all_responses):
+        doc_parts = [f'{_FB}"""Mock endpoint with query parameter support.']
+        for i, resp in enumerate(all_responses, start=1):
             sc = resp.get("status", 200)
-            resp_body = body_literal(resp.get("body") or "{}")
-            if i == 0:
-                lines.append(f'{_FB}if True:')
-            else:
-                lines.append(f'{_FB}elif False:')
-            if 400 <= sc < 600:
-                exc = _STATUS_EXC.get(sc, "HTTP_500_INTERNAL_SERVER_ERROR")
-                lines.append(f'{_FB}    raise HTTPException(status_code=status.{exc}, detail={resp_body})')
-            else:
-                lines.append(f'{_FB}    return {resp_body}')
+            preview = (resp.get("body") or "")[:60]
+            doc_parts.append(f'{_FB}  [{i}] status {sc}: {preview}')
+        doc_parts.append(f'{_FB}"""')
+        lines.extend(doc_parts)
 
     if 400 <= sc0 < 600:
-        exc = _STATUS_EXC.get(sc0, "HTTP_500_INTERNAL_SERVER_ERROR")
+        exc = _STATUS_EXC.get(sc0, f"HTTP_{sc0}_ERROR")
         lines.append(f'{_FB}raise HTTPException(status_code=status.{exc}, detail={body0})')
     else:
         lines.append(f'{_FB}return {body0}')
