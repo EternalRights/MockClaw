@@ -68,3 +68,46 @@ class TestCLIErrorHandling:
     def test_no_arguments(self):
         result = runner.invoke(app, [])
         assert result.exit_code in [0, 2]
+
+
+class TestInfoCommand:
+    """Tests for the 'info' command."""
+
+    def test_info_text_output(self):
+        result = runner.invoke(app, ["info"])
+        assert result.exit_code == 0
+        stdout = result.stdout
+        assert "MockClaw" in stdout
+        assert "Python" in stdout
+        assert "Platform" in stdout
+
+    def test_info_json_output(self):
+        result = runner.invoke(app, ["info", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.stdout)
+        assert "mockclaw" in data
+        assert "python" in data
+        assert "dependencies" in data
+        assert "environment" in data
+        assert isinstance(data["dependencies"], dict)
+
+    def test_info_json_short_flag(self):
+        result = runner.invoke(app, ["info", "-j"])
+        assert result.exit_code == 0
+        data = json.loads(result.stdout)
+        assert "mockclaw" in data
+
+
+class TestVersionFlag:
+    """Tests for the --version / -v flag."""
+
+    def test_version_long_flag(self):
+        result = runner.invoke(app, ["--version"])
+        assert result.exit_code == 0
+        assert "MockClaw" in result.stdout
+        assert "version" in result.stdout.lower()
+
+    def test_version_short_flag(self):
+        result = runner.invoke(app, ["-v"])
+        assert result.exit_code == 0
+        assert "MockClaw" in result.stdout

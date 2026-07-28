@@ -8,7 +8,7 @@ import pytest
 
 from core.parser import HARParser
 from core.generator import MockGenerator, GenerationResult
-from core.route_builder import build_route, generate_func_name
+from core.route_builder import build_route, generate_func_name, body_literal
 
 
 def test_har_parser(tmp_path, minimal_har_data):
@@ -215,3 +215,35 @@ class TestEdgeCases:
         route_code = build_route("POST", "/api/multi", responses, "post__api_multi", use_smart_fallback=True)
         assert "@app.post" in route_code
         assert "if" in route_code or "return" in route_code
+
+
+class TestBodyLiteral:
+    """Tests for the body_literal utility function."""
+
+    def test_valid_json_compact(self):
+        result = body_literal('{"key": "value", "num": 1}')
+        parsed = json.loads(result)
+        assert parsed == {"key": "value", "num": 1}
+
+    def test_nested_json(self):
+        result = body_literal('{"user": {"name": "Alice", "age": 30}}')
+        parsed = json.loads(result)
+        assert parsed["user"]["name"] == "Alice"
+
+    def test_json_array(self):
+        result = body_literal('[{"id": 1}, {"id": 2}]')
+        parsed = json.loads(result)
+        assert isinstance(parsed, list)
+        assert len(parsed) == 2
+
+    def test_invalid_json_fallback(self):
+        result = body_literal("not valid json")
+        assert "not valid json" in result
+
+    def test_empty_string(self):
+        result = body_literal("")
+        assert result is not None
+
+    def test_null_value(self):
+        result = body_literal("null")
+        assert result == "null"

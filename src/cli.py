@@ -506,47 +506,79 @@ def test(
 
 
 @app.command()
-def info():
+def info(
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output in JSON format (machine-readable)",
+    ),
+):
     """
     Show system information and configuration.
     
     Displays Python version, installed packages, and environment details
-    useful for debugging and troubleshooting.
+    useful for debugging and troubleshooting. Use --json for
+    machine-readable output.
     """
+    import os
+
+    info_data = {
+        "mockclaw": __version__,
+        "python": {
+            "version": sys.version,
+            "platform": sys.platform,
+        },
+        "working_directory": str(Path.cwd()),
+        "dependencies": {},
+        "environment": {},
+    }
+
+    for pkg_name, import_name in [
+        ("fastapi", "fastapi"),
+        ("uvicorn", "uvicorn"),
+        ("typer", "typer"),
+        ("httpx", "httpx"),
+        ("rich", "rich"),
+        ("orjson", "orjson"),
+    ]:
+        try:
+            mod = __import__(import_name)
+            info_data["dependencies"][pkg_name] = getattr(mod, "__version__", "unknown")
+        except ImportError:
+            info_data["dependencies"][pkg_name] = None
+
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if openai_key:
+        info_data["environment"]["OPENAI_API_KEY"] = f"{'*' * 8}{openai_key[-4:]}"
+    else:
+        info_data["environment"]["OPENAI_API_KEY"] = None
+
+    if json_output:
+        console.print_json(data=info_data)
+        return
+
     console.print("\n[bold cyan]MockClaw System Information[/bold cyan]\n")
-    
+
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("Component", style="bold")
     table.add_column("Version/Info", style="green")
-    
+
     table.add_row("MockClaw", __version__)
-    table.add_row("Python", f"{sys.version}")
+    table.add_row("Python", sys.version)
     table.add_row("Platform", sys.platform)
     table.add_row("Working Directory", str(Path.cwd()))
-    
-    try:
-        import fastapi
-        table.add_row("FastAPI", fastapi.__version__)
-    except ImportError:
-        table.add_row("FastAPI", "[red]Not installed[/red]")
-    
-    try:
-        import uvicorn
-        table.add_row("Uvicorn", uvicorn.__version__)
-    except ImportError:
-        table.add_row("Uvicorn", "[red]Not installed[/red]")
-    
-    try:
-        import typer
-        table.add_row("Typer", typer.__version__)
-    except ImportError:
-        table.add_row("Typer", "[red]Not installed[/red]")
-    
+
+    for pkg_name, ver in info_data["dependencies"].items():
+        display_name = pkg_name.capitalize() if pkg_name != "httpx" else "HTTPX"
+        if ver:
+            table.add_row(display_name, ver)
+        else:
+            table.add_row(display_name, "[red]Not installed[/red]")
+
     console.print(table)
-    
+
     console.print("\n[bold]Environment Variables:[/bold]")
-    import os
-    openai_key = os.getenv("OPENAI_API_KEY")
     if openai_key:
         console.print(f"  OPENAI_API_KEY: [green]{'*' * 8}{openai_key[-4:]}[/green]")
     else:
