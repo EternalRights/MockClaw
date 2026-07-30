@@ -49,16 +49,17 @@ MockClaw generates mock API servers from captured HTTP traffic. It transforms HA
   - Auto-injected resilience middleware
 
 ### CLI (Command Line Interface)
-- **Technology**: Python + Typer
-- **Purpose**: Command-line tool for generate, serve, record, and test
+- **Technology**: Python + Typer + Rich
+- **Purpose**: Command-line tool for generate, serve, record, test, and system info
 - **Entry**: `src/cli.py`
+- **Project Config**: `pyproject.toml` (ruff, mypy, pytest)
 - **Commands**:
   - `mockclaw generate` - Generate mock server from HAR file
   - `mockclaw serve` - Start mock API server
   - `mockclaw record` - Record traffic from running API
   - `mockclaw test` - Run chaos tests against mock server
   - `mockclaw example` - Quick start with sample data
-  - `mockclaw info` - Show system information
+  - `mockclaw info` - Show system information (use `--json` for machine-readable)
 
 ### Dashboard (Web UI)
 - **Technology**: Next.js 14 + React
@@ -104,11 +105,13 @@ MockClaw generates mock API servers from captured HTTP traffic. It transforms HA
 ├── web/                       # Next.js Frontend (under development)
 ├── tests/                     # Test suite
 │   ├── gauntlet/              # Integration test data
-│   ├── conftest.py            # Test configuration
-│   ├── test_generation.py     # Generation tests
-│   └── test_cli.py            # CLI tests
+│   ├── conftest.py            # Pytest fixtures
+│   ├── test_generation.py     # Generation + body_literal tests
+│   └── test_cli.py            # CLI tests (all commands + --version)
 ├── docs/                      # Documentation
-├── setup.py                   # Package setup
+├── pyproject.toml             # Project metadata & tooling config
+├── .editorconfig              # Editor style rules
+├── setup.py                   # Legacy package setup
 └── README.md                  # Project readme
 ```
 
