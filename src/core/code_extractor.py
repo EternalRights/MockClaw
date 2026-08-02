@@ -11,13 +11,18 @@ import re
 class CodeExtractor:
     """Extracts Python code from LLM response text.
 
-    Handles both explicit `````python`` fenced blocks and generic
+    Handles both explicit ``python`` fenced blocks and generic
     fenced code blocks.  Falls back to returning the raw response
     when no code block is detected.
+
+    Robust against common LLM formatting variations:
+    - `` ```python\\n `` (newline after language tag)
+    - `` ```python `` (space then code on same line)
+    - `` ``` `` without language specifier
     """
 
-    _PYTHON_BLOCK = re.compile(r"```python\n(.*?)```", re.DOTALL)
-    _GENERIC_BLOCK = re.compile(r"```\n?(.*?)```", re.DOTALL)
+    _PYTHON_BLOCK = re.compile(r"```python\s*\n?(.*?)```", re.DOTALL)
+    _GENERIC_BLOCK = re.compile(r"```\s*\n?(.*?)```", re.DOTALL)
 
     def extract_code(self, response: str) -> str:
         """Extract Python code from an LLM response.

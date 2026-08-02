@@ -9,6 +9,7 @@ import pytest
 from core.parser import HARParser
 from core.generator import MockGenerator, GenerationResult
 from core.route_builder import build_route, generate_func_name, body_literal
+from core.code_extractor import CodeExtractor
 
 
 def test_har_parser(tmp_path, minimal_har_data):
@@ -247,3 +248,28 @@ class TestBodyLiteral:
     def test_null_value(self):
         result = body_literal("null")
         assert result == "null"
+
+
+class TestCodeExtractor:
+    """Tests for CodeExtractor — LLM response code block extraction."""
+
+    def test_extract_python_block_with_newline(self):
+        extractor = CodeExtractor()
+        response = "```python\nprint('hello')\n```"
+        assert extractor.extract_code(response) == "print('hello')"
+
+    def test_extract_python_block_same_line(self):
+        extractor = CodeExtractor()
+        response = "```python print('hello')```"
+        code = extractor.extract_code(response)
+        assert "print('hello')" in code
+
+    def test_extract_generic_block(self):
+        extractor = CodeExtractor()
+        response = "Here is code:\n```\ndef foo():\n    pass\n```\nDone."
+        assert "def foo():" in extractor.extract_code(response)
+
+    def test_fallback_no_blocks(self):
+        extractor = CodeExtractor()
+        response = "No code blocks here, just plain text."
+        assert extractor.extract_code(response) == response
