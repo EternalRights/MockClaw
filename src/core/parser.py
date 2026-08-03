@@ -20,7 +20,7 @@ STATIC_MIME_PREFIXES = (
 
 STATIC_URL_EXTENSIONS = frozenset([
     '.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.svg',
-    '.ico', '.woff', '.woff2', '.ttf', '.eot', '.webp'
+    '.ico', '.woff', '.woff2', '.ttf', '.eot', '.webp', '.map',
 ])
 
 UUID_PATTERN = re.compile(r'/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.IGNORECASE)
