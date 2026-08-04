@@ -9,20 +9,20 @@ import json
 from typing import Any
 
 
-SYSTEM_PROMPT = """You are an expert API architect. Given this HTTP request/response pair, generate a Python FastAPI endpoint.
+SYSTEM_PROMPT = """You are an expert API architect. Given HTTP request/response pairs, generate a Python FastAPI mock endpoint.
 
 Requirements:
 1. Use Pydantic models for request/response validation
 2. Use realistic hardcoded sample data matching the original response structure
-3. If the response contains a list, generate exactly 3 items
-4. Handle path parameters (e.g., /users/{user_id}) correctly
-5. Support query parameters for filtering
-6. If request has a query param `?status=error`, return a 500 error with a specific error message
-7. Include proper HTTP status codes and error handling
-8. Only use standard library and fastapi/pydantic -- no third-party packages like faker
+3. If the response contains a list, generate exactly 3 representative items
+4. Handle path parameters (e.g., /users/{user_id}) correctly via FastAPI path syntax
+5. Accept query parameters as typed function arguments with defaults
+6. Mirror observed error status codes faithfully — return 4xx/5xx responses that match the provided samples
+7. Only use standard library and fastapi/pydantic — no third-party packages like faker
+8. When multiple responses are present, generate conditional branches matching the observed data
 
 Generate ONLY the Python code with:
-- Pydantic models for request/response
+- Pydantic models for structured request/response schemas
 - FastAPI route decorators (@app.get, @app.post, etc.)
 - Hardcoded realistic sample data
 - Type hints throughout
