@@ -4,9 +4,11 @@ Record, generate, and serve mock APIs from HAR files.
 """
 
 import sys
+import re
 import socket
 import subprocess
 import uvicorn
+from collections import Counter
 from pathlib import Path
 
 import typer
@@ -50,6 +52,9 @@ Examples:
 
   # Run chaos tests against mock server
   $ mockclaw test generated_mocks
+
+  # Show mock server statistics
+  $ mockclaw stats generated_mocks
 
 Documentation: https://github.com/EternalRights/MockClaw/docs
     """,
@@ -583,6 +588,143 @@ def info(
         console.print(f"  OPENAI_API_KEY: [green]{'*' * 8}{openai_key[-4:]}[/green]")
     else:
         console.print(f"  OPENAI_API_KEY: [yellow]Not set (optional)[/yellow]")
+
+
+@app.command()
+def stats(
+    mock_dir: str = typer.Argument(
+        "generated_mocks",
+        help="Directory containing generated mocks",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output in JSON format (machine-readable)",
+    ),
+):
+    """
+    Show statistics about a generated mock server.
+
+    Analyzes the generated FastAPI code to show endpoint counts,
+    HTTP method distribution, routing complexity, and status code
+    breakdown.
+
+    Examples:
+      $ mockclaw stats generated_mocks
+      $ mockclaw stats generated_mocks --json
+    """
+    mock_path = Path(mock_dir) / "dynamic_api.py"
+    if not mock_path.exists():
+        console.print(f"[red]Mock file not found: {mock_path}[/red]")
+        console.print("\n[yellow]Generate mocks first:[/yellow]")
+        console.print(
+            f"  [cyan]mockclaw generate examples/sample.har {mock_dir} --smart-fallback[/cyan]"
+        )
+        raise typer.Exit(1)
+
+    content = mock_path.read_text(encoding="utf-8")
+    _BUILTIN = {"health", "mockclaw/info"}
+
+    decorator_pat = re.compile(r'@app\.(\w+)\("([^"]+)"\)')
+    error_pat = re.compile(r"raise HTTPException\(status_code=status\.(\w+)")
+
+    # Phase 1: discover endpoints
+    endpoints: list[dict] = []
+    for line in content.splitlines():
+        m = decorator_pat.search(line)
+        if not m:
+            continue
+        method, path = m.group(1).upper(), m.group(2)
+        if path.strip("/") in _BUILTIN:
+            continue
+        endpoints.append({"method": method, "path": path})
+
+    if not endpoints:
+        console.print("[yellow]No generated endpoints found.[/yellow]")
+        return
+
+    # Phase 2: analyze each endpoint's block for routing type and status codes
+    for ep in endpoints:
+        marker = f'@app.{ep["method"].lower()}("{ep["path"]}")'
+        pos = content.find(marker)
+        block = content[pos : pos + 800] if pos >= 0 else ""
+
+        ep["smart"] = "request: Request" in block[:500]
+
+        statuses = [m.group(1) for m in error_pat.finditer(block[:500])]
+        if not statuses:
+            statuses = ["200_OK"]
+        ep["status_codes"] = statuses
+
+    # Phase 3: aggregate
+    method_counts = Counter(ep["method"] for ep in endpoints)
+    smart_count = sum(1 for ep in endpoints if ep["smart"])
+    all_statuses = Counter()
+    for ep in endpoints:
+        all_statuses.update(ep["status_codes"])
+
+    result = {
+        "file": str(mock_path),
+        "file_size_bytes": mock_path.stat().st_size,
+        "total_endpoints": len(endpoints),
+        "method_counts": dict(method_counts),
+        "smart_routing_count": smart_count,
+        "simple_routing_count": len(endpoints) - smart_count,
+        "status_codes": dict(all_statuses),
+    }
+
+    if json_output:
+        result["endpoints"] = {
+            f'{ep["method"]} {ep["path"]}': {
+                "smart": ep["smart"],
+                "status_codes": ep["status_codes"],
+            }
+            for ep in endpoints
+        }
+        console.print_json(data=result)
+        return
+
+    console.print("\n[bold cyan]Mock Server Statistics[/bold cyan]\n")
+
+    info_table = Table(show_header=False, box=None)
+    info_table.add_column("Key", style="bold")
+    info_table.add_column("Value", style="cyan")
+    info_table.add_row("File", str(mock_path))
+    info_table.add_row("Size", f"{result['file_size_bytes']:,} bytes")
+    info_table.add_row("Total Endpoints", str(result["total_endpoints"]))
+    console.print(info_table)
+
+    console.print("\n[bold]HTTP Methods:[/bold]")
+    method_table = Table(show_header=True, header_style="bold cyan")
+    method_table.add_column("Method", style="bold")
+    method_table.add_column("Count", justify="right")
+    for method, count in sorted(method_counts.items()):
+        method_table.add_row(method, str(count))
+    console.print(method_table)
+
+    console.print("\n[bold]Routing:[/bold]")
+    route_table = Table(show_header=True, header_style="bold cyan")
+    route_table.add_column("Type", style="bold")
+    route_table.add_column("Count", justify="right")
+    route_table.add_row("[green]Smart[/green]", str(smart_count))
+    route_table.add_row("[dim]Simple[/dim]", str(result["simple_routing_count"]))
+    console.print(route_table)
+
+    if all_statuses:
+        console.print("\n[bold]Response Statuses:[/bold]")
+        status_table = Table(show_header=True, header_style="bold cyan")
+        status_table.add_column("Status", style="bold")
+        status_table.add_column("Count", justify="right")
+        for status, count in sorted(all_statuses.items()):
+            if "200" in status or "201" in status:
+                color = "green"
+            elif "400" in status or "401" in status or "403" in status or "404" in status:
+                color = "yellow"
+            else:
+                color = "red"
+            status_table.add_row(f"[{color}]{status}[/{color}]", str(count))
+        console.print(status_table)
 
 
 if __name__ == "__main__":

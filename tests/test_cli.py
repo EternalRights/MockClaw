@@ -111,3 +111,70 @@ class TestVersionFlag:
         result = runner.invoke(app, ["-v"])
         assert result.exit_code == 0
         assert "MockClaw" in result.stdout
+
+
+class TestStatsCommand:
+    """Tests for the 'stats' command."""
+
+    def test_stats_missing_directory(self):
+        result = runner.invoke(app, ["stats", "./nonexistent_dir_xyz"])
+        assert result.exit_code != 0
+
+    def test_stats_text_output(self, tmp_path):
+        mock_file = tmp_path / "dynamic_api.py"
+        mock_file.write_text(
+            '@app.get("/api/users")\n'
+            'async def get_api_users():\n'
+            '    return {"users": []}\n\n'
+            '@app.post("/api/login")\n'
+            'async def post_api_login():\n'
+            '    return {"token": "abc"}\n',
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["stats", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "Total Endpoints" in result.stdout
+        assert "GET" in result.stdout
+        assert "POST" in result.stdout
+
+    def test_stats_json_output(self, tmp_path):
+        mock_file = tmp_path / "dynamic_api.py"
+        mock_file.write_text(
+            '@app.get("/api/health")\n'
+            'async def get_api_health():\n'
+            '    return {"status": "ok"}\n',
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["stats", str(tmp_path), "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.stdout)
+        assert data["total_endpoints"] == 1
+        assert "endpoints" in data
+
+    def test_stats_filters_builtin_endpoints(self, tmp_path):
+        mock_file = tmp_path / "dynamic_api.py"
+        mock_file.write_text(
+            '@app.get("/health")\n'
+            'async def health():\n'
+            '    return {"status": "OK"}\n\n'
+            '@app.get("/api/data")\n'
+            'async def get_api_data():\n'
+            '    return {"data": [1, 2, 3]}\n',
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["stats", str(tmp_path), "--json"])
+        data = json.loads(result.stdout)
+        assert data["total_endpoints"] == 1
+
+    def test_stats_detects_smart_routing(self, tmp_path):
+        mock_file = tmp_path / "dynamic_api.py"
+        mock_file.write_text(
+            '@app.post("/api/checkout")\n'
+            'async def post_api_checkout(request: Request):\n'
+            '    body = await request.json()\n'
+            '    return {"status": "ok"}\n',
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["stats", str(tmp_path), "--json"])
+        data = json.loads(result.stdout)
+        assert data["smart_routing_count"] == 1
