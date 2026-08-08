@@ -404,6 +404,32 @@ async def generate_all_endpoints():
     }
 
 
+class StatsResponse(BaseModel):
+    total_endpoints: int = Field(..., description="Total parsed endpoints")
+    generated: int = Field(..., description="Number of generated endpoints")
+    pending: int = Field(..., description="Number of endpoints awaiting generation")
+    failures: int = Field(..., description="Number of failed generations")
+    uptime: str = Field(..., description="Service uptime")
+
+
+@app.get("/stats", response_model=StatsResponse, tags=["System"])
+async def get_stats():
+    """Return generation statistics and current state summary."""
+    endpoints = app_state.endpoints
+    generated = sum(1 for ep in endpoints.values() if ep.get("generated"))
+    failures = sum(
+        1 for log in app_state.get_recent_logs(1000)
+        if log.get("level") == "error"
+    )
+    return StatsResponse(
+        total_endpoints=len(endpoints),
+        generated=generated,
+        pending=len(endpoints) - generated,
+        failures=failures,
+        uptime=get_uptime(),
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
