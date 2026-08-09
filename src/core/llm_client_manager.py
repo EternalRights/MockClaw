@@ -115,10 +115,16 @@ class LLMClientManager:
         Raises:
             The last exception if all retries are exhausted.
         """
+        model = kwargs.get("model", "unknown")
         last_exc: Exception | None = None
         for attempt in range(self._max_retries):
             try:
-                return fn(*args, **kwargs)
+                result = fn(*args, **kwargs)
+                if attempt > 0:
+                    _logger.info("LLM call succeeded on attempt %d/%d (model=%s)", attempt + 1, self._max_retries, model)
+                else:
+                    _logger.debug("LLM call succeeded (model=%s)", model)
+                return result
             except self._TRANSIENT_ERRORS as exc:
                 last_exc = exc
                 if attempt < self._max_retries - 1:

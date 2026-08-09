@@ -203,12 +203,21 @@ async def health_check():
 
 @app.get("/mockclaw/info", tags=["System"])
 async def mockclaw_info():
+    endpoints = app_state.endpoints
+    generated = sum(1 for ep in endpoints.values() if ep.get("generated"))
+    log_errors = sum(
+        1 for log in app_state.get_recent_logs(1000)
+        if log.get("level") == "error"
+    )
     return {
         "generator": "MockClaw",
         "version": APP_VERSION,
-        "endpoints": list(app_state.endpoints.keys()),
-        "total_generated": len([e for e in app_state.endpoints.values() if e.get("generated")]),
-        "uptime": get_uptime()
+        "endpoints": list(endpoints.keys()),
+        "total": len(endpoints),
+        "generated": generated,
+        "pending": len(endpoints) - generated,
+        "errors": log_errors,
+        "uptime": get_uptime(),
     }
 
 
