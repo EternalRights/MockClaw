@@ -44,6 +44,7 @@ class HTTPResponse:
     headers: dict
     body: str | None = None
     content_type: str | None = None
+    latency_ms: int = 0
 
 
 @dataclass
@@ -153,7 +154,8 @@ class HARParser:
             status=response.get('status', 200),
             headers=self._parse_headers(response.get('headers', [])),
             body=content.get('text'),
-            content_type=content_type
+            content_type=content_type,
+            latency_ms=int(entry.get('time', 0)),
         )
 
     def parse(self) -> list[APIEndpoint]:
@@ -204,6 +206,9 @@ class HARParser:
                 {
                     "resource_path": ep.resource_path,
                     "method": ep.method,
+                    "avg_latency_ms": int(
+                        sum(r.latency_ms for r in ep.responses) / len(ep.responses)
+                    ) if ep.responses else 0,
                     "sample_request": {
                         "url": ep.requests[0].url if ep.requests else "",
                         "headers": ep.requests[0].headers if ep.requests else {},

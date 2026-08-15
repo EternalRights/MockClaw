@@ -69,6 +69,14 @@ def _extract_query_params(url: str) -> dict[str, str]:
     return params
 
 
+def _latency_line(latency_ms: int, indent: str = _FB) -> str:
+    """Build an ``await asyncio.sleep()`` line to simulate response latency."""
+    if latency_ms <= 0:
+        return ""
+    seconds = latency_ms / 1000.0
+    return f"{indent}await asyncio.sleep({seconds:.3f})\n"
+
+
 def build_route(
     method: str,
     path: str,
@@ -76,6 +84,7 @@ def build_route(
     func_name: str,
     use_smart_fallback: bool = False,
     sample_request: dict[str, Any] | None = None,
+    latency_ms: int = 0,
 ) -> str:
     """Build a complete FastAPI route string for one endpoint.
 
@@ -84,7 +93,12 @@ def build_route(
 
     If *use_smart_fallback* is ``True``, generates conditional routing based
     on request body fields or query parameters.
+
+    If *latency_ms* is positive, injects an ``await asyncio.sleep()`` into the
+    handler to mimic the original response time recorded in the HAR file.
     """
+    latency = _latency_line(latency_ms)
+
     has_request_body = any(
         resp.get("request", {}).get("body")
         for resp in all_responses
@@ -95,16 +109,17 @@ def build_route(
     )
 
     if use_smart_fallback and method in ["POST", "PUT", "PATCH", "DELETE"] and has_request_body:
-        return _generate_smart_route(method, path, all_responses, func_name)
+        return _generate_smart_route(method, path, all_responses, func_name, latency_ms)
 
     if use_smart_fallback and method == "GET" and has_query_params and len(all_responses) > 1:
-        return _generate_query_route(method, path, all_responses, func_name, sample_request)
+        return _generate_query_route(method, path, all_responses, func_name, sample_request, latency_ms)
 
     if not all_responses:
         return (
             f'@app.{method.lower()}("{path}")\n'
             f"async def {func_name}():\n"
             f'{_FB}"""Mock endpoint -- no HAR response data."""\n'
+            f"{latency}"
             f"{_FB}return {{}}\n"
         )
 
@@ -128,6 +143,8 @@ def build_route(
             preview = (resp.get("body") or "")[:60]
             lines.append(f'{_FB}  [{i}] status {sc}: {preview}')
         lines.append(f'{_FB}"""')
+        if latency:
+            lines.append(latency.rstrip("\n"))
         lines.append(body_code)
         return "\n".join(lines) + "\n"
 
@@ -135,6 +152,7 @@ def build_route(
         f'@app.{method.lower()}("{path}")\n'
         f"async def {func_name}():\n"
         f'{_FB}"""Mock endpoint -- HAR status {sc0}."""\n'
+        f"{latency}"
         f"{body_code}\n"
     )
 
@@ -144,6 +162,7 @@ def _generate_smart_route(
     path: str,
     all_responses: list[dict[str, Any]],
     func_name: str,
+    latency_ms: int = 0,
 ) -> str:
     """Generate route with conditional logic based on request body analysis.
 
@@ -151,6 +170,8 @@ def _generate_smart_route(
     differing values, then generates if/elif/else routing logic.
     No hardcoded field names -- works with any JSON request body.
     """
+    latency = _latency_line(latency_ms)
+
     parsed_requests: list[tuple[dict[str, Any], int, Any]] = []
 
     for resp in all_responses:
@@ -168,7 +189,7 @@ def _generate_smart_route(
                 continue
 
     if len(parsed_requests) < 2:
-        return build_route(method, path, all_responses, func_name, use_smart_fallback=False)
+        return build_route(method, path, all_responses, func_name, use_smart_fallback=False, latency_ms=latency_ms)
 
     all_fields: set[str] = set()
     for req_data, _, _ in parsed_requests:
@@ -186,7 +207,7 @@ def _generate_smart_route(
             field_values[field] = values_seen
 
     if not field_values:
-        return build_route(method, path, all_responses, func_name, use_smart_fallback=False)
+        return build_route(method, path, all_responses, func_name, use_smart_fallback=False, latency_ms=latency_ms)
 
     best_field = max(
         field_values.keys(),
@@ -205,9 +226,11 @@ def _generate_smart_route(
         f'@app.{method.lower()}("{path}")',
         f"async def {func_name}(request: Request):",
         f'{_FB}"""Smart mock endpoint with conditional routing."""',
-        f'{_FB}body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {{}}',
-        "",
     ]
+    if latency:
+        lines.append(latency.rstrip("\n"))
+    lines.append(f'{_FB}body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {{}}')
+    lines.append("")
 
     for i, (value, status, resp_data) in enumerate(unique_patterns):
         if i == 0:
@@ -245,6 +268,7 @@ def _generate_query_route(
     all_responses: list[dict[str, Any]],
     func_name: str,
     sample_request: dict[str, Any] | None = None,
+    latency_ms: int = 0,
 ) -> str:
     """Generate route with query parameter support for GET endpoints.
 
@@ -252,12 +276,14 @@ def _generate_query_route(
     properly accepts those parameters as FastAPI function arguments
     and supports conditional routing based on parameter values.
     """
+    latency = _latency_line(latency_ms)
+
     if not sample_request:
-        return build_route(method, path, all_responses, func_name, use_smart_fallback=False)
+        return build_route(method, path, all_responses, func_name, use_smart_fallback=False, latency_ms=latency_ms)
 
     query_params = sample_request.get("query_params", {})
     if not query_params:
-        return build_route(method, path, all_responses, func_name, use_smart_fallback=False)
+        return build_route(method, path, all_responses, func_name, use_smart_fallback=False, latency_ms=latency_ms)
 
     param_names = list(query_params.keys())
 
@@ -283,6 +309,9 @@ def _generate_query_route(
             doc_parts.append(f'{_FB}  [{i}] status {sc}: {preview}')
         doc_parts.append(f'{_FB}"""')
         lines.extend(doc_parts)
+
+    if latency:
+        lines.append(latency.rstrip("\n"))
 
     if 400 <= sc0 < 600:
         exc = _STATUS_EXC.get(sc0, f"HTTP_{sc0}_ERROR")

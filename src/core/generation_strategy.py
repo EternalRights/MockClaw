@@ -18,6 +18,9 @@ from .route_builder import build_route, generate_func_name
 class GenerationStrategy(ABC):
     """Abstract base class for mock endpoint generation strategies."""
 
+    def __init__(self, simulate_latency: bool = False) -> None:
+        self._simulate_latency = simulate_latency
+
     @abstractmethod
     def generate(self, endpoint_data: dict[str, Any]) -> str:
         """Generate FastAPI route code for a single endpoint."""
@@ -27,6 +30,16 @@ class GenerationStrategy(ABC):
         """Async variant of generate -- defaults to sync in executor."""
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.generate, endpoint_data)
+
+    def _resolve_latency(self, endpoint_data: dict[str, Any]) -> int:
+        """Return the latency (ms) to simulate for this endpoint.
+
+        Returns ``0`` when latency simulation is disabled or the HAR data
+        carried no timing information.
+        """
+        if not self._simulate_latency:
+            return 0
+        return int(endpoint_data.get("avg_latency_ms", 0) or 0)
 
     @staticmethod
     def _extract_common(
@@ -139,6 +152,7 @@ class TemplateGenerationStrategy(GenerationStrategy):
             func_name,
             use_smart_fallback=False,
             sample_request=sample_request,
+            latency_ms=self._resolve_latency(endpoint_data),
         )
 
 
@@ -160,4 +174,5 @@ class SmartRoutingStrategy(GenerationStrategy):
             func_name,
             use_smart_fallback=True,
             sample_request=sample_request,
+            latency_ms=self._resolve_latency(endpoint_data),
         )

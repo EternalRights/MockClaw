@@ -254,6 +254,11 @@ def generate(
         "--smart-fallback",
         help="Enable smart conditional routing based on request body analysis",
     ),
+    simulate_latency: bool = typer.Option(
+        False,
+        "--simulate-latency",
+        help="Inject await asyncio.sleep() to mimic original HAR response times",
+    ),
 ):
     """
     Generate mock API server from HAR file.
@@ -265,6 +270,7 @@ def generate(
       - Default: LLM-assisted if API key configured, otherwise template fallback
       - --no-llm: Simple template fallback (returns HAR response as-is)
       - --smart-fallback: Smart routing based on request body field analysis
+      - --simulate-latency: Inject realistic response delays from HAR timings
     
     Examples:
       # Generate from sample HAR (recommended for first-time users)
@@ -272,6 +278,9 @@ def generate(
       
       # Generate without LLM (simple template mode)
       $ mockclaw generate tests/gauntlet/flow.har --no-llm
+      
+      # Generate with realistic response latency
+      $ mockclaw generate traffic.har ./my_mocks --smart-fallback --simulate-latency
       
       # Custom output directory
       $ mockclaw generate traffic.har ./my_mocks --smart-fallback
@@ -310,13 +319,13 @@ def generate(
             
             if no_llm:
                 mode = "Template Fallback (simple, no smart routing)"
-                generator = MockGenerator(use_smart_fallback=False)
+                generator = MockGenerator(use_smart_fallback=False, simulate_latency=simulate_latency)
             elif smart_fallback:
                 mode = "Smart Fallback (rule-based routing)"
-                generator = MockGenerator(use_smart_fallback=True)
+                generator = MockGenerator(use_smart_fallback=True, simulate_latency=simulate_latency)
             else:
                 mode = "LLM-assisted (if API key configured)"
-                generator = MockGenerator()
+                generator = MockGenerator(simulate_latency=simulate_latency)
             
             console.print(f"\n[dim]   Mode: {mode}[/dim]")
             

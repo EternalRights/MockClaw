@@ -273,3 +273,53 @@ class TestCodeExtractor:
         extractor = CodeExtractor()
         response = "No code blocks here, just plain text."
         assert extractor.extract_code(response) == response
+
+
+class TestLatencySimulation:
+    """Tests for latency simulation from HAR timing data."""
+
+    def test_parser_extracts_avg_latency(self, tmp_path, minimal_har_data):
+        test_file = tmp_path / "test.har"
+        test_file.write_text(json.dumps(minimal_har_data), encoding="utf-8")
+
+        parser = HARParser(str(test_file))
+        data = parser.export_as_dict()
+
+        login = next(e for e in data["endpoints"] if "login" in e["resource_path"])
+        assert login["avg_latency_ms"] == 150
+
+        users = next(e for e in data["endpoints"] if "users" in e["resource_path"])
+        assert users["avg_latency_ms"] == 80
+
+    def test_build_route_injects_sleep(self):
+        responses = [{"status": 200, "body": '{"ok": true}'}]
+        route = build_route("GET", "/api/slow", responses, "get_api_slow", latency_ms=250)
+        assert "await asyncio.sleep(0.250)" in route
+
+    def test_build_route_no_latency_when_zero(self):
+        responses = [{"status": 200, "body": '{"ok": true}'}]
+        route = build_route("GET", "/api/fast", responses, "get_api_fast", latency_ms=0)
+        assert "asyncio.sleep" not in route
+
+    def test_smart_route_injects_sleep(self):
+        responses = [
+            {"request": {"body": '{"role": "admin"}'}, "status": 200, "body": '{"ok": 1}'},
+            {"request": {"body": '{"role": "user"}'}, "status": 200, "body": '{"ok": 2}'},
+        ]
+        route = build_route("POST", "/api/check", responses, "post_api_check", use_smart_fallback=True, latency_ms=120)
+        assert "await asyncio.sleep(0.120)" in route
+
+    def test_generator_with_simulate_latency(self, tmp_path, minimal_har_data):
+        test_file = tmp_path / "test.har"
+        test_file.write_text(json.dumps(minimal_har_data), encoding="utf-8")
+
+        parser = HARParser(str(test_file))
+        endpoints_data = parser.export_as_dict()
+
+        output_dir = tmp_path / "mocks"
+        generator = MockGenerator(use_smart_fallback=True, simulate_latency=True)
+        generator.generate_all(endpoints_data["endpoints"], str(output_dir))
+
+        content = (output_dir / "dynamic_api.py").read_text(encoding="utf-8")
+        assert "import asyncio" in content
+        assert "await asyncio.sleep" in content

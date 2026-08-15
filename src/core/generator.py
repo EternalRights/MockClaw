@@ -36,6 +36,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Any
 from starlette.middleware.base import BaseHTTPMiddleware
+import asyncio
 import time
 import json
 from collections import defaultdict
@@ -144,6 +145,8 @@ class MockGenerator:
         model: Model identifier (default gpt-4o-mini, from MODEL_NAME env).
         use_smart_fallback: Enable smart routing based on request body
             analysis.
+        simulate_latency: Inject ``await asyncio.sleep()`` into generated
+            handlers to mimic the original response time recorded in the HAR.
     """
 
     _BUILTIN_PATHS = {"/health", "/mockclaw/info"}
@@ -153,19 +156,21 @@ class MockGenerator:
         api_key: str | None = None,
         model: str | None = None,
         use_smart_fallback: bool = False,
+        simulate_latency: bool = False,
     ) -> None:
         self._client_manager = LLMClientManager(api_key=api_key)
         self._prompt_builder = PromptBuilder()
         self._code_extractor = CodeExtractor()
         self.model = model or os.getenv("MODEL_NAME", "gpt-4o-mini")
         self.use_smart_fallback = use_smart_fallback
+        self.simulate_latency = simulate_latency
         self._strategy = self._create_strategy()
 
     def _create_strategy(self) -> GenerationStrategy:
         fallback = (
-            SmartRoutingStrategy()
+            SmartRoutingStrategy(simulate_latency=self.simulate_latency)
             if self.use_smart_fallback
-            else TemplateGenerationStrategy()
+            else TemplateGenerationStrategy(simulate_latency=self.simulate_latency)
         )
         if self._client_manager.is_available:
             return LLMGenerationStrategy(
