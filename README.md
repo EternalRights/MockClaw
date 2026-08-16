@@ -58,11 +58,26 @@ async def post__checkout(request: Request):
 
 No hardcoded field names. Works with any JSON request body -- coupon codes, user roles, action types, or anything else.
 
+## Latency Simulation
+
+HAR files record how long each request actually took (`time` field). When `--simulate-latency` is enabled, MockClaw uses this data to inject realistic response delays into the generated mocks:
+
+```python
+@app.get("/api/slow-endpoint")
+async def get_api_slow_endpoint():
+    """Mock endpoint -- HAR status 200."""
+    await asyncio.sleep(0.200)  # average response time from HAR
+    return {"status": "ok"}
+```
+
+This makes your mock server behave like the real API — invaluable for testing timeout handling, loading states, and race conditions.
+
 ## Features
 
 - **Auto conditional routing** — analyzes request bodies to generate if/elif/else logic
 - **No LLM required** — works offline with zero API keys
 - **Auto-injected security** — rate limiting, path traversal protection, error handling
+- **Latency simulation** — injects realistic response delays from HAR timing data
 - **Swagger UI** — interactive API docs at /docs
 - **LLM-assisted mode** — optional OpenAI integration for richer mocks
 - **Chaos testing** — built-in fault injection to verify service resilience
@@ -76,11 +91,17 @@ mockclaw example
 # Generate from HAR file
 mockclaw generate traffic.har ./mocks --smart-fallback
 
+# Generate with realistic response latency (from HAR timings)
+mockclaw generate traffic.har ./mocks --smart-fallback --simulate-latency
+
 # Start mock server
 mockclaw serve ./mocks --port 8000
 
 # Record traffic from running API
 mockclaw record --url http://localhost:9000 --output traffic.har
+
+# Show mock server statistics
+mockclaw stats ./mocks
 
 # Run chaos tests
 mockclaw test ./mocks
