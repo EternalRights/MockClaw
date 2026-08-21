@@ -4,13 +4,16 @@ Starts the mock server and runs adversarial tests against it.
 """
 
 import asyncio
+import argparse
 import json
+import math
 import time
 import sys
 import subprocess
 import signal
 from pathlib import Path
 from datetime import datetime
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -56,17 +59,33 @@ _MINIMAL_HAR = {
 }
 
 
+def _percentile(sorted_values: list[float], pct: float) -> float:
+    """Return the ``pct``-th percentile of a pre-sorted list of values.
+
+    Uses the nearest-rank method. Returns ``0.0`` for an empty list.
+    """
+    if not sorted_values:
+        return 0.0
+    idx = max(0, int(math.ceil(pct / 100.0 * len(sorted_values))) - 1)
+    return sorted_values[idx]
+
+
+def _format_ms(value: float) -> float:
+    """Round a millisecond value to two decimal places for reporting."""
+    return round(value, 2)
+
+
 class EnhancedChaosBreaker:
     """Enhanced adversarial testing engine."""
 
-    def __init__(self, base_url: str = "http://localhost:8000", mock_dir: str = "generated_mocks"):
+    def __init__(self, base_url: str = "http://localhost:8000", mock_dir: str = "generated_mocks") -> None:
         self.base_url = base_url
         self.mock_dir = Path(mock_dir)
-        self.results = []
-        self.failures = []
-        self.server_process = None
+        self.results: list[dict[str, Any]] = []
+        self.failures: list[str] = []
+        self.server_process: subprocess.Popen | None = None
 
-    def log(self, message: str, level: str = "INFO"):
+    def log(self, message: str, level: str = "INFO") -> None:
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         print(f"[{timestamp}] [{level}] {message}")
         if level == "FAIL":
@@ -276,29 +295,86 @@ class EnhancedChaosBreaker:
         self.log(f"Rapid fire: 100 requests in {elapsed:.2f}s, {errors} errors")
         return {"status": "passed", "time": elapsed, "errors": errors}
 
-    async def run_all_chaos_tests(self):
+    async def test_latency(self, num_requests: int = 30) -> dict[str, Any]:
+        """Benchmark endpoint latency and report percentile statistics.
+
+        Sends ``num_requests`` sequential GET requests to ``/health`` and
+        reports min/max/avg as well as p50/p95/p99 percentiles. Useful for
+        validating that ``--simulate-latency`` generated mocks behave
+        realistically, or for detecting unexpected slow endpoints.
+        """
+        try:
+            import httpx
+        except ImportError:
+            self.log("httpx not available, skipping latency test", "WARN")
+            return {"status": "skipped"}
+
+        self.log(f"CHAOS: Benchmarking latency ({num_requests} requests)...")
+
+        latencies: list[float] = []
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=30) as client:
+            for _ in range(num_requests):
+                start = time.perf_counter()
+                try:
+                    await client.get("/health")
+                    latencies.append((time.perf_counter() - start) * 1000)
+                except Exception as exc:
+                    self.log(f"Latency test request failed: {exc}", "WARN")
+
+        if not latencies:
+            return {"status": "failed", "reason": "no_successful_requests"}
+
+        sorted_latencies = sorted(latencies)
+        stats = {
+            "count": len(latencies),
+            "min_ms": _format_ms(sorted_latencies[0]),
+            "max_ms": _format_ms(sorted_latencies[-1]),
+            "avg_ms": _format_ms(sum(latencies) / len(latencies)),
+            "p50_ms": _format_ms(_percentile(sorted_latencies, 50)),
+            "p95_ms": _format_ms(_percentile(sorted_latencies, 95)),
+            "p99_ms": _format_ms(_percentile(sorted_latencies, 99)),
+        }
+        self.log(
+            "Latency stats: "
+            f"avg={stats['avg_ms']}ms p50={stats['p50_ms']}ms "
+            f"p95={stats['p95_ms']}ms p99={stats['p99_ms']}ms"
+        )
+        return {"status": "passed", **stats}
+
+    async def run_all_chaos_tests(
+        self,
+        only: list[str] | None = None,
+        json_output: bool = False,
+    ) -> dict[str, Any]:
+        test_suite = [
+            ("concurrency", "Concurrency Test", self.test_concurrency),
+            ("garbage", "Garbage Data Test", self.test_garbage_data),
+            ("malformed_urls", "Malformed URL Test", self.test_malformed_urls),
+            ("rate_limiting", "Rate Limiting Test", self.test_rate_limiting),
+            ("latency", "Latency Benchmark", self.test_latency),
+        ]
+
+        if only:
+            test_suite = [
+                (name, label, fn)
+                for name, label, fn in test_suite
+                if name in only
+            ]
+
         print("\n" + "=" * 60)
         print("ENHANCED CHAOS BREAKER - Adversarial Testing")
         print("=" * 60)
 
-        results = {}
+        results: dict[str, Any] = {}
 
         if not self.start_mock_server():
             self.log("Failed to start server, aborting tests", "FAIL")
             return {"status": "aborted", "reason": "server_start_failed"}
 
         try:
-            print("\n[TEST 1] Concurrency Test...")
-            results["concurrency"] = await self.test_concurrency(50)
-
-            print("\n[TEST 2] Garbage Data Test...")
-            results["garbage"] = await self.test_garbage_data()
-
-            print("\n[TEST 3] Malformed URL Test...")
-            results["malformed_urls"] = await self.test_malformed_urls()
-
-            print("\n[TEST 4] Rate Limiting Test...")
-            results["rate_limiting"] = await self.test_rate_limiting()
+            for idx, (name, label, fn) in enumerate(test_suite, start=1):
+                print(f"\n[TEST {idx}] {label}...")
+                results[name] = await fn()
 
             print("\n" + "=" * 60)
             print("CHAOS TEST RESULTS")
@@ -314,24 +390,61 @@ class EnhancedChaosBreaker:
                 for f in self.failures:
                     print(f"  - {f}")
 
-            return {
+            summary = {
                 "total_tests": len(results),
                 "failures": len(self.failures),
-                "results": results
+                "results": results,
             }
+
+            if json_output:
+                print("\n" + json.dumps(summary, indent=2))
+
+            return summary
 
         finally:
             self.stop_mock_server()
 
 
-async def main():
-    mock_dir = sys.argv[1] if len(sys.argv) > 1 else "generated_mocks"
-    breaker = EnhancedChaosBreaker(mock_dir=mock_dir)
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Run adversarial chaos tests against a MockClaw mock server.",
+    )
+    parser.add_argument(
+        "mock_dir",
+        nargs="?",
+        default="generated_mocks",
+        help="Directory containing generated mocks (default: generated_mocks)",
+    )
+    parser.add_argument(
+        "--base-url",
+        default="http://localhost:8000",
+        help="Base URL of the running mock server (default: http://localhost:8000)",
+    )
+    parser.add_argument(
+        "--only",
+        help="Comma-separated list of test names to run (e.g. latency,rate_limiting)",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Print the final summary as JSON to stdout",
+    )
+    return parser.parse_args(argv)
 
-    results = {"status": "aborted", "total_tests": 0, "failures": 0, "results": {}}
+
+async def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv if argv is not None else sys.argv[1:])
+
+    only = [name.strip() for name in args.only.split(",")] if args.only else None
+
+    breaker = EnhancedChaosBreaker(base_url=args.base_url, mock_dir=args.mock_dir)
+
+    results: dict[str, Any] = {"status": "aborted", "total_tests": 0, "failures": 0, "results": {}}
 
     try:
-        results = await breaker.run_all_chaos_tests()
+        results = await breaker.run_all_chaos_tests(only=only, json_output=args.json_output)
     except Exception as e:
         print(f"Chaos test error: {e}")
         results = {
