@@ -10,21 +10,31 @@ import requests
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse, parse_qsl
 
 
 class GauntletRecorder:
     """Records user sessions and exports as HAR file."""
     
-    def __init__(self, base_url: str = "http://localhost:9000"):
+    def __init__(self, base_url: str = "http://localhost:9000") -> None:
         self.base_url = base_url
         self.entries: list[dict[str, Any]] = []
         self.session = requests.Session()
     
     def record_request(self, method: str, url: str, request_data: Any = None, 
                        response_data: Any = None, status_code: int = 200,
-                       error: str = None):
-        """Record a single request/response pair."""
+                       error: str | None = None) -> dict[str, Any]:
+        """Record a single request/response pair.
+
+        Extracts query parameters from *url* into the HAR ``queryString``
+        field so the downstream parser can detect filtering parameters.
+        """
         timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+        parsed_url = urlparse(url)
+        query_string = [
+            {"name": key, "value": value}
+            for key, value in parse_qsl(parsed_url.query)
+        ]
         
         entry = {
             "startedDateTime": timestamp,
@@ -37,7 +47,7 @@ class GauntletRecorder:
                     {"name": "Content-Type", "value": "application/json"},
                     {"name": "User-Agent", "value": "MockClaw-Gauntlet/1.0"}
                 ],
-                "queryString": [],
+                "queryString": query_string,
                 "postData": None,
                 "headersSize": 200,
                 "bodySize": len(json.dumps(request_data)) if request_data is not None else 0
@@ -70,7 +80,7 @@ class GauntletRecorder:
         self.entries.append(entry)
         return entry
     
-    def run_user_session(self):
+    def run_user_session(self) -> None:
         """Simulate a complete user shopping session."""
         
         print("\n🛍️  Starting user shopping session...")
@@ -220,7 +230,7 @@ class GauntletRecorder:
         
         print("\n✅ User session complete!")
     
-    def export_har(self, output_path: str = "tests/gauntlet/flow.har"):
+    def export_har(self, output_path: str = "tests/gauntlet/flow.har") -> Path:
         """Export recorded session as HAR file."""
         har_data = {
             "log": {
@@ -247,7 +257,7 @@ class GauntletRecorder:
         return output_file
 
 
-def main():
+def main() -> int:
     """Main entry point."""
     
     print("=" * 60)
