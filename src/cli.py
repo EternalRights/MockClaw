@@ -637,6 +637,7 @@ def stats(
 
     decorator_pat = re.compile(r'@app\.(\w+)\("([^"]+)"\)')
     error_pat = re.compile(r"raise HTTPException\(status_code=status\.(\w+)")
+    latency_pat = re.compile(r"await asyncio\.sleep\(([\d.]+)\)")
 
     # Phase 1: discover endpoints
     endpoints: list[dict] = []
@@ -666,12 +667,20 @@ def stats(
             statuses = ["200_OK"]
         ep["status_codes"] = statuses
 
+        latency_matches = latency_pat.findall(block[:500])
+        if latency_matches:
+            ep["latency_ms"] = float(latency_matches[0]) * 1000
+
     # Phase 3: aggregate
     method_counts = Counter(ep["method"] for ep in endpoints)
     smart_count = sum(1 for ep in endpoints if ep["smart"])
     all_statuses = Counter()
     for ep in endpoints:
         all_statuses.update(ep["status_codes"])
+
+    latencies = [ep["latency_ms"] for ep in endpoints if "latency_ms" in ep]
+    latency_endpoints = len(latencies)
+    avg_latency = round(sum(latencies) / latency_endpoints, 1) if latencies else 0.0
 
     result = {
         "file": str(mock_path),
@@ -681,6 +690,10 @@ def stats(
         "smart_routing_count": smart_count,
         "simple_routing_count": len(endpoints) - smart_count,
         "status_codes": dict(all_statuses),
+        "latency": {
+            "simulated_endpoints": latency_endpoints,
+            "avg_latency_ms": avg_latency,
+        },
     }
 
     if json_output:
@@ -688,6 +701,7 @@ def stats(
             f'{ep["method"]} {ep["path"]}': {
                 "smart": ep["smart"],
                 "status_codes": ep["status_codes"],
+                "latency_ms": ep.get("latency_ms"),
             }
             for ep in endpoints
         }
@@ -734,6 +748,20 @@ def stats(
                 color = "red"
             status_table.add_row(f"[{color}]{status}[/{color}]", str(count))
         console.print(status_table)
+
+    console.print("\n[bold]Latency Simulation:[/bold]")
+    latency_table = Table(show_header=True, header_style="bold cyan")
+    latency_table.add_column("Metric", style="bold")
+    latency_table.add_column("Value", justify="right")
+    latency_table.add_row(
+        "Endpoints with latency",
+        str(result["latency"]["simulated_endpoints"]),
+    )
+    latency_table.add_row(
+        "Average latency",
+        f"{result['latency']['avg_latency_ms']} ms",
+    )
+    console.print(latency_table)
 
 
 if __name__ == "__main__":

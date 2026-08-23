@@ -178,3 +178,21 @@ class TestStatsCommand:
         result = runner.invoke(app, ["stats", str(tmp_path), "--json"])
         data = json.loads(result.stdout)
         assert data["smart_routing_count"] == 1
+
+    def test_stats_detects_latency(self, tmp_path):
+        mock_file = tmp_path / "dynamic_api.py"
+        mock_file.write_text(
+            '@app.get("/api/slow")\n'
+            'async def get_api_slow():\n'
+            '    await asyncio.sleep(0.200)\n'
+            '    return {"ok": true}\n\n'
+            '@app.get("/api/fast")\n'
+            'async def get_api_fast():\n'
+            '    return {"ok": true}\n',
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["stats", str(tmp_path), "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.stdout)
+        assert data["latency"]["simulated_endpoints"] == 1
+        assert data["latency"]["avg_latency_ms"] == 200.0
