@@ -323,3 +323,42 @@ class TestLatencySimulation:
         content = (output_dir / "dynamic_api.py").read_text(encoding="utf-8")
         assert "import asyncio" in content
         assert "await asyncio.sleep" in content
+
+
+class TestStaticAssetFilter:
+    """Tests for HARParser._is_static_asset filtering."""
+
+    def _entry(self, url: str, mime_type: str = "application/json"):
+        return {
+            "request": {"url": url, "method": "GET", "headers": []},
+            "response": {
+                "status": 200,
+                "headers": [],
+                "content": {"mimeType": mime_type, "text": "{}"},
+            },
+        }
+
+    def test_js_with_query_string_is_static(self):
+        parser = HARParser("unused.har")
+        entry = self._entry("https://example.com/app.js?ver=1.2.3")
+        assert parser._is_static_asset(entry) is True
+
+    def test_css_with_query_string_is_static(self):
+        parser = HARParser("unused.har")
+        entry = self._entry("https://example.com/style.css?v=42")
+        assert parser._is_static_asset(entry) is True
+
+    def test_plain_js_is_static(self):
+        parser = HARParser("unused.har")
+        entry = self._entry("https://example.com/static/bundle.js")
+        assert parser._is_static_asset(entry) is True
+
+    def test_api_endpoint_is_not_static(self):
+        parser = HARParser("unused.har")
+        entry = self._entry("https://api.example.com/v1/users")
+        assert parser._is_static_asset(entry) is False
+
+    def test_static_by_mime_type(self):
+        parser = HARParser("unused.har")
+        entry = self._entry("https://example.com/images/photo", mime_type="image/png")
+        assert parser._is_static_asset(entry) is True

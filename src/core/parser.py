@@ -81,7 +81,11 @@ class HARParser:
         request = entry.get('request', {})
         url = request.get('url', '')
 
-        _, ext = os.path.splitext(url.lower())
+        # Parse the path out of the URL before taking the extension so that
+        # query strings (e.g. /app.js?ver=1) and scheme/host don't break the
+        # extension check.
+        parsed = urlparse(url)
+        _, ext = os.path.splitext(parsed.path.lower())
         if ext in STATIC_URL_EXTENSIONS:
             return True
 
