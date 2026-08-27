@@ -262,6 +262,29 @@ def _generate_smart_route(
     return "\n".join(lines) + "\n"
 
 
+_KEYWORDS = frozenset({
+    "await", "class", "def", "del", "elif", "else", "except", "for",
+    "from", "global", "if", "import", "in", "is", "lambda", "not",
+    "or", "pass", "raise", "return", "try", "while", "with", "yield",
+    "async", "assert", "break", "continue", "finally", "nonlocal",
+})
+
+
+def _safe_param_name(name: str) -> str:
+    """Turn a query parameter name into a valid Python argument name.
+
+    HAR captures can contain names like ``user-id``, ``filter[]`` or
+    straight-up Python keywords (``class``). None of those survive as
+    function arguments, so sanitize and de-keyword them.
+    """
+    safe = re.sub(r"\W", "_", name)
+    if not safe or safe[0].isdigit():
+        safe = f"q_{safe}"
+    if safe in _KEYWORDS:
+        safe = f"{safe}_"
+    return safe
+
+
 def _generate_query_route(
     method: str,
     path: str,
@@ -294,7 +317,10 @@ def _generate_query_route(
 
     for param in param_names:
         default_val = query_params[param]
-        lines.append(f'{_FB}{param}: str = "{default_val}",')
+        # json.dumps handles quotes/backslashes/newlines inside the value;
+        # a plain f-string interpolation would emit broken Python.
+        default_literal = json.dumps(str(default_val))
+        lines.append(f"{_FB}{_safe_param_name(param)}: str = {default_literal},")
     lines.append(f"):")
     lines.append(f'{_FB}"""Mock endpoint with query parameter support."""')
 

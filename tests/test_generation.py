@@ -433,3 +433,40 @@ class TestDuplicateEntryCollapse:
 
         endpoints = HARParser(str(f)).get_endpoints()
         assert len(endpoints[0].responses) == 2
+
+
+class TestQueryRouteGeneration:
+    """Query-param routes must survive hostile param names and values."""
+
+    def _build(self, query_params):
+        responses = [
+            {"status": 200, "body": '{"ok": true}'},
+            {"status": 200, "body": '{"ok": true, "more": 1}'},
+        ]
+        request = {"query_params": query_params}
+        return build_route(
+            "GET", "/api/search", responses, "get_api_search",
+            use_smart_fallback=True, sample_request=request,
+        )
+
+    def test_default_value_with_quotes_compiles(self):
+        route = self._build({"q": 'he said "hi"\\'})
+        compile(route, "<route>", "exec")
+
+    def test_hyphenated_param_name_compiles(self):
+        route = self._build({"user-id": "42"})
+        compile(route, "<route>", "exec")
+        assert "user_id: str" in route
+
+    def test_keyword_param_name_compiles(self):
+        route = self._build({"class": "premium"})
+        compile(route, "<route>", "exec")
+
+    def test_param_starting_with_digit(self):
+        route = self._build({"2fa": "on"})
+        compile(route, "<route>", "exec")
+
+    def test_normal_params_unchanged(self):
+        route = self._build({"category": "electronics", "page": "2"})
+        assert "category: str" in route
+        assert "page: str" in route
