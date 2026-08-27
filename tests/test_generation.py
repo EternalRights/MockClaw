@@ -362,3 +362,74 @@ class TestStaticAssetFilter:
         parser = HARParser("unused.har")
         entry = self._entry("https://example.com/images/photo", mime_type="image/png")
         assert parser._is_static_asset(entry) is True
+
+
+class TestDuplicateEntryCollapse:
+    """Identical entries from polling/retries should collapse to one."""
+
+    def _har(self, entries):
+        return {"log": {"version": "1.2", "entries": entries}}
+
+    def _entry(self, url, body=None, status=200, resp_body='{"ok": true}'):
+        return {
+            "request": {
+                "method": "GET",
+                "url": url,
+                "headers": [],
+                "queryString": [],
+                "postData": (
+                    {"mimeType": "application/json", "text": body}
+                    if body is not None else None
+                ),
+            },
+            "response": {
+                "status": status,
+                "headers": [],
+                "content": {"mimeType": "application/json", "text": resp_body},
+            },
+        }
+
+    def test_identical_entries_collapse(self, tmp_path):
+        har = self._har([self._entry("https://api.example.com/poll")] * 5)
+        f = tmp_path / "test.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+
+        endpoints = HARParser(str(f)).get_endpoints()
+        assert len(endpoints) == 1
+        assert len(endpoints[0].responses) == 1
+
+    def test_same_url_different_response_kept(self, tmp_path):
+        har = self._har([
+            self._entry("https://api.example.com/poll", None, status=200),
+            self._entry("https://api.example.com/poll", None, status=503, resp_body='{"err": 1}'),
+        ])
+        f = tmp_path / "test.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+
+        endpoints = HARParser(str(f)).get_endpoints()
+        assert len(endpoints[0].responses) == 2
+
+    def test_same_url_different_request_body_kept(self, tmp_path):
+        entries = [
+            {
+                "request": {
+                    "method": "POST",
+                    "url": "https://api.example.com/login",
+                    "headers": [],
+                    "queryString": [],
+                    "postData": {"mimeType": "application/json", "text": body},
+                },
+                "response": {
+                    "status": 200,
+                    "headers": [],
+                    "content": {"mimeType": "application/json", "text": "{}"},
+                },
+            }
+            for body in ['{"user": "a"}', '{"user": "b"}', '{"user": "b"}']
+        ]
+        har = self._har(entries)
+        f = tmp_path / "test.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+
+        endpoints = HARParser(str(f)).get_endpoints()
+        assert len(endpoints[0].responses) == 2

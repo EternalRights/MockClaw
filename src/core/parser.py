@@ -163,11 +163,18 @@ class HARParser:
         )
 
     def parse(self) -> list[APIEndpoint]:
-        """Parse all entries and group by resource."""
+        """Parse all entries and group by resource.
+
+        Duplicate entries (same method, URL, request body, status and
+        response body) are collapsed to one. Browser captures routinely
+        contain repeats from polling, retries or page reloads, and keeping
+        them inflates scenario counts and misleads the routing analyzer.
+        """
         if not self.entries:
             self.load_har()
 
         endpoint_groups: dict[str, APIEndpoint] = {}
+        seen: set[tuple] = set()
 
         for entry in self.entries:
             if self._is_static_asset(entry):
@@ -176,6 +183,17 @@ class HARParser:
             request = self._parse_request(entry)
             response = self._parse_response(entry)
             resource_path = self._extract_url_path(request.url)
+
+            signature = (
+                request.method,
+                request.url,
+                request.body,
+                response.status,
+                response.body,
+            )
+            if signature in seen:
+                continue
+            seen.add(signature)
 
             endpoint_key = f"{request.method}:{resource_path}"
 
