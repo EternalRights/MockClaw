@@ -196,3 +196,24 @@ class TestStatsCommand:
         data = json.loads(result.stdout)
         assert data["latency"]["simulated_endpoints"] == 1
         assert data["latency"]["avg_latency_ms"] == 200.0
+
+    def test_stats_detects_latency_after_long_docstring(self, tmp_path):
+        # A long multi-scenario docstring pushes the sleep line past any
+        # fixed 500-char window; the scan must still find it.
+        scenarios = "".join(
+            f'    [ {i}] status 200: {"x" * 60}\n' for i in range(1, 30)
+        )
+        mock_file = tmp_path / "dynamic_api.py"
+        mock_file.write_text(
+            '@app.get("/api/big")\n'
+            'async def get_api_big():\n'
+            f'    """Mock endpoint -- 29 HAR scenarios recorded.\n{scenarios}    """\n'
+            '    await asyncio.sleep(0.350)\n'
+            '    return {"ok": true}\n',
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["stats", str(tmp_path), "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.stdout)
+        assert data["latency"]["simulated_endpoints"] == 1
+        assert data["latency"]["avg_latency_ms"] == 350.0

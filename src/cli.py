@@ -639,37 +639,45 @@ def stats(
     error_pat = re.compile(r"raise HTTPException\(status_code=status\.(\w+)")
     latency_pat = re.compile(r"await asyncio\.sleep\(([\d.]+)\)")
 
-    # Phase 1: discover endpoints
-    endpoints: list[dict] = []
-    for line in content.splitlines():
-        m = decorator_pat.search(line)
-        if not m:
-            continue
-        method, path = m.group(1).upper(), m.group(2)
+    # Phase 1: discover endpoints and record where each one starts.
+    # Splitting on decorator positions instead of a fixed character window
+    # matters: endpoints with several recorded scenarios carry a long
+    # docstring, and the latency/status lines sit past any fixed offset.
+    matches = []
+    for m in decorator_pat.finditer(content):
+        method = m.group(1).upper()
+        path = m.group(2)
         if path.strip("/") in _BUILTIN:
             continue
-        endpoints.append({"method": method, "path": path})
+        matches.append((method, path, m.start()))
+
+    endpoints = [
+        {"method": method, "path": path, "_pos": pos}
+        for method, path, pos in matches
+    ]
 
     if not endpoints:
         console.print("[yellow]No generated endpoints found.[/yellow]")
         return
 
     # Phase 2: analyze each endpoint's block for routing type and status codes
-    for ep in endpoints:
-        marker = f'@app.{ep["method"].lower()}("{ep["path"]}")'
-        pos = content.find(marker)
-        block = content[pos : pos + 800] if pos >= 0 else ""
+    for i, ep in enumerate(endpoints):
+        start = ep["_pos"]
+        end = endpoints[i + 1]["_pos"] if i + 1 < len(endpoints) else len(content)
+        block = content[start:end]
 
-        ep["smart"] = "request: Request" in block[:500]
+        ep["smart"] = "request: Request" in block
 
-        statuses = [m.group(1) for m in error_pat.finditer(block[:500])]
+        statuses = [m.group(1) for m in error_pat.finditer(block)]
         if not statuses:
             statuses = ["200_OK"]
         ep["status_codes"] = statuses
 
-        latency_matches = latency_pat.findall(block[:500])
+        latency_matches = latency_pat.findall(block)
         if latency_matches:
             ep["latency_ms"] = float(latency_matches[0]) * 1000
+
+        del ep["_pos"]
 
     # Phase 3: aggregate
     method_counts = Counter(ep["method"] for ep in endpoints)
