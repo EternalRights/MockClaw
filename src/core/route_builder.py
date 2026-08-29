@@ -157,6 +157,73 @@ def build_route(
     )
 
 
+def _dedupe_requests(
+    parsed: list[tuple[dict[str, Any], int, Any]],
+) -> list[tuple[dict[str, Any], int, Any]]:
+    """Collapse duplicate request bodies, keeping the first response.
+
+    Two entries with the same JSON body should route to one response, so a
+    repeated body is dropped after the first occurrence.
+    """
+    seen: dict[str, tuple[dict[str, Any], int, Any]] = {}
+    for req, status, resp in parsed:
+        key = json.dumps(req, sort_keys=True)
+        if key not in seen:
+            seen[key] = (req, status, resp)
+    return list(seen.values())
+
+
+def _select_discriminating_fields(
+    distinct: list[tuple[dict[str, Any], int, Any]],
+    all_fields: list[str],
+) -> list[str]:
+    """Pick the smallest field set that separates every distinct response.
+
+    Greedy: start with no fields, then keep adding the field that resolves
+    the most remaining "different response, same key" collisions until no
+    pair of distinct responses shares a key, or the fields run out. This is
+    what lets routing work when a single field is not enough, e.g. requests
+    that differ only on a secondary field like ``region`` while ``role``
+    stays the same.
+    """
+    n = len(distinct)
+    resp_sig = [
+        (status, json.dumps(resp, sort_keys=True))
+        for _, status, resp in distinct
+    ]
+
+    def keys(fields: list[str]) -> list[tuple]:
+        return [tuple(req.get(f) for f in fields) for req, _, _ in distinct]
+
+    def collisions(fields: list[str]) -> set:
+        ks = keys(fields)
+        pairs = set()
+        for i in range(n):
+            for j in range(i + 1, n):
+                if resp_sig[i] != resp_sig[j] and ks[i] == ks[j]:
+                    pairs.add((i, j))
+        return pairs
+
+    selected: list[str] = []
+    current = collisions(selected)
+    remaining = list(all_fields)
+    while current and remaining:
+        best_field: str | None = None
+        best_broken = -1
+        for field in remaining:
+            after = collisions(selected + [field])
+            broken = len(current) - len(after)
+            if broken > best_broken:
+                best_broken = broken
+                best_field = field
+        if best_field is None or best_broken == 0:
+            break
+        selected.append(best_field)
+        remaining.remove(best_field)
+        current = collisions(selected)
+    return selected
+
+
 def _generate_smart_route(
     method: str,
     path: str,
@@ -166,9 +233,10 @@ def _generate_smart_route(
 ) -> str:
     """Generate route with conditional logic based on request body analysis.
 
-    Automatically analyzes multiple request bodies to find fields with
-    differing values, then generates if/elif/else routing logic.
-    No hardcoded field names -- works with any JSON request body.
+    Automatically analyzes multiple request bodies to find the fields that
+    separate them, then generates if/elif/else routing. When one field is
+    not enough to tell two responses apart, the discriminator adds further
+    fields and joins their checks with ``and``. No hardcoded field names.
     """
     latency = _latency_line(latency_ms)
 
@@ -188,39 +256,21 @@ def _generate_smart_route(
             except (json.JSONDecodeError, TypeError):
                 continue
 
-    if len(parsed_requests) < 2:
+    distinct = _dedupe_requests(parsed_requests)
+
+    if len(distinct) < 2:
         return build_route(method, path, all_responses, func_name, use_smart_fallback=False, latency_ms=latency_ms)
 
-    all_fields: set[str] = set()
-    for req_data, _, _ in parsed_requests:
-        all_fields.update(req_data.keys())
+    all_fields: list[str] = []
+    for req_data, _, _ in distinct:
+        for field in req_data:
+            if field not in all_fields:
+                all_fields.append(field)
 
-    field_values: dict[str, list[tuple[Any, int, Any]]] = {}
-    for field in all_fields:
-        values_seen: list[tuple[Any, int, Any]] = []
-        for req_data, resp_status, resp_data in parsed_requests:
-            if field in req_data:
-                val = req_data[field]
-                values_seen.append((val, resp_status, resp_data))
-        unique_vals = set(v for v, _, _ in values_seen)
-        if len(unique_vals) > 1:
-            field_values[field] = values_seen
+    fields = _select_discriminating_fields(distinct, all_fields)
 
-    if not field_values:
+    if not fields:
         return build_route(method, path, all_responses, func_name, use_smart_fallback=False, latency_ms=latency_ms)
-
-    best_field = max(
-        field_values.keys(),
-        key=lambda f: (len(set(v for v, _, _ in field_values[f])), f),
-    )
-
-    patterns: list[tuple[Any, int, Any]] = field_values[best_field]
-    seen_values: set[Any] = set()
-    unique_patterns: list[tuple[Any, int, Any]] = []
-    for val, status, resp in patterns:
-        if val not in seen_values:
-            seen_values.add(val)
-            unique_patterns.append((val, status, resp))
 
     lines = [
         f'@app.{method.lower()}("{path}")',
@@ -232,11 +282,24 @@ def _generate_smart_route(
     lines.append(f'{_FB}body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {{}}')
     lines.append("")
 
-    for i, (value, status, resp_data) in enumerate(unique_patterns):
-        if i == 0:
-            lines.append(f'{_FB}if body.get("{best_field}") == {json.dumps(value)}:')
-        else:
-            lines.append(f'{_FB}elif body.get("{best_field}") == {json.dumps(value)}:')
+    emitted: set[str] = set()
+    first = True
+    for req_data, status, resp_data in distinct:
+        checks = [
+            f'body.get("{field}") == {json.dumps(req_data[field])}'
+            for field in fields
+            if field in req_data
+        ]
+        if not checks:
+            continue
+        condition = " and ".join(checks)
+        if condition in emitted:
+            continue
+        emitted.add(condition)
+
+        keyword = "if" if first else "elif"
+        first = False
+        lines.append(f"{_FB}{keyword} {condition}:")
 
         if 400 <= status < 600:
             exc = _STATUS_EXC.get(status, "HTTP_500_INTERNAL_SERVER_ERROR")

@@ -100,6 +100,42 @@ def test_smart_fallback_no_differing_fields():
     assert "@app.post" in route_code, "Should still generate a valid route"
 
 
+class TestSmartRouteMultiField:
+    """Single-field routing is not enough when a secondary field differs."""
+
+    def test_two_fields_joined_with_and(self):
+        # No single field separates all three responses: role can tell
+        # admin from user but not us from eu, region the opposite. Both
+        # are needed, so the generated conditions must join them with and.
+        responses = [
+            {"request": {"body": '{"role": "admin", "region": "us"}'}, "status": 200, "body": '{"tier": "us"}'},
+            {"request": {"body": '{"role": "admin", "region": "eu"}'}, "status": 200, "body": '{"tier": "eu"}'},
+            {"request": {"body": '{"role": "user", "region": "us"}'}, "status": 200, "body": '{"tier": "basic"}'},
+        ]
+        route = build_route("POST", "/api/perm", responses, "post_api_perm", use_smart_fallback=True)
+        assert " and " in route
+        assert 'body.get("role")' in route
+        assert 'body.get("region")' in route
+        compile(route, "<route>", "exec")
+
+    def test_single_field_still_used_when_enough(self):
+        responses = [
+            {"request": {"body": '{"role": "admin", "region": "us"}'}, "status": 200, "body": '{"a": 1}'},
+            {"request": {"body": '{"role": "user", "region": "us"}'}, "status": 200, "body": '{"b": 2}'},
+        ]
+        route = build_route("POST", "/api/role", responses, "post_api_role", use_smart_fallback=True)
+        assert " and " not in route
+        assert 'body.get("role")' in route
+
+    def test_distinct_bodies_collapse_to_one_branch(self):
+        responses = [
+            {"request": {"body": '{"id": 1}'}, "status": 200, "body": '{"ok": 1}'},
+            {"request": {"body": '{"id": 1}'}, "status": 200, "body": '{"ok": 1}'},
+        ]
+        route = build_route("POST", "/api/dup", responses, "post_api_dup", use_smart_fallback=True)
+        assert "elif" not in route
+
+
 def test_health_endpoints_in_generated_code(tmp_path, minimal_har_data):
     test_file = tmp_path / "test.har"
     test_file.write_text(json.dumps(minimal_har_data), encoding="utf-8")
