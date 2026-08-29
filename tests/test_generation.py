@@ -10,6 +10,11 @@ from core.parser import HARParser
 from core.generator import MockGenerator, GenerationResult
 from core.route_builder import build_route, generate_func_name, body_literal
 from core.code_extractor import CodeExtractor
+from core.generation_strategy import (
+    GenerationStrategy,
+    LLMGenerationStrategy,
+)
+from core.prompt_builder import PromptBuilder
 
 
 def test_har_parser(tmp_path, minimal_har_data):
@@ -506,3 +511,105 @@ class TestQueryRouteGeneration:
         route = self._build({"category": "electronics", "page": "2"})
         assert "category: str" in route
         assert "page: str" in route
+
+
+class TestLLMCodeValidation:
+    """LLM output that fails to compile must never reach the mock file."""
+
+    def test_valid_python(self):
+        assert LLMGenerationStrategy._is_valid_python(
+            "@app.get('/x')\nasync def x():\n    return {}\n"
+        )
+
+    def test_syntax_error(self):
+        assert not LLMGenerationStrategy._is_valid_python("def broken(:\n")
+
+    def test_empty_string(self):
+        assert not LLMGenerationStrategy._is_valid_python("")
+
+    def test_falls_back_on_broken_code(self):
+        class _FakeResponse:
+            def __init__(self, content):
+                self.choices = [type(
+                    "C", (),
+                    {"message": type("M", (), {"content": content})()},
+                )()]
+
+        class _FakeClient:
+            def __init__(self, content):
+                self.chat = type(
+                    "Chat", (),
+                    {"completions": type(
+                        "Comp", (),
+                        {"create": lambda self, **kw: _FakeResponse(content)},
+                    )()},
+                )()
+
+        class _FakeManager:
+            def __init__(self, content):
+                self._content = content
+
+            def get_client(self):
+                return _FakeClient(self._content)
+
+            def call_with_retry(self, fn, *args, **kwargs):
+                return fn(*args, **kwargs)
+
+        class _StubFallback(GenerationStrategy):
+            def generate(self, endpoint_data):
+                return "@app.get('/stub')\nasync def stub():\n    return {}\n"
+
+        strategy = LLMGenerationStrategy(
+            client_manager=_FakeManager("def broken(:\n"),
+            prompt_builder=PromptBuilder(),
+            code_extractor=CodeExtractor(),
+            fallback=_StubFallback(),
+        )
+        code = strategy.generate({
+            "method": "GET",
+            "resource_path": "/x",
+            "sample_request": {},
+            "sample_responses": [],
+        })
+        assert "stub" in code
+
+    def test_raises_without_fallback_on_broken_code(self):
+        class _FakeResponse:
+            def __init__(self, content):
+                self.choices = [type(
+                    "C", (),
+                    {"message": type("M", (), {"content": content})()},
+                )()]
+
+        class _FakeClient:
+            def __init__(self, content):
+                self.chat = type(
+                    "Chat", (),
+                    {"completions": type(
+                        "Comp", (),
+                        {"create": lambda self, **kw: _FakeResponse(content)},
+                    )()},
+                )()
+
+        class _FakeManager:
+            def __init__(self, content):
+                self._content = content
+
+            def get_client(self):
+                return _FakeClient(self._content)
+
+            def call_with_retry(self, fn, *args, **kwargs):
+                return fn(*args, **kwargs)
+
+        strategy = LLMGenerationStrategy(
+            client_manager=_FakeManager("def broken(:\n"),
+            prompt_builder=PromptBuilder(),
+            code_extractor=CodeExtractor(),
+        )
+        with pytest.raises(RuntimeError):
+            strategy.generate({
+                "method": "GET",
+                "resource_path": "/x",
+                "sample_request": {},
+                "sample_responses": [],
+            })

@@ -6,6 +6,7 @@ Strategy pattern for mock endpoint code generation.
 from __future__ import annotations
 
 import asyncio
+import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -13,6 +14,8 @@ from .code_extractor import CodeExtractor
 from .llm_client_manager import LLMClientManager
 from .prompt_builder import PromptBuilder, SYSTEM_PROMPT
 from .route_builder import build_route, generate_func_name
+
+_logger = logging.getLogger(__name__)
 
 
 class GenerationStrategy(ABC):
@@ -122,13 +125,40 @@ class LLMGenerationStrategy(GenerationStrategy):
                 temperature=0.3,
                 max_tokens=2000,
             )
-            return self._code_extractor.extract_code(
+            code = self._code_extractor.extract_code(
                 response.choices[0].message.content or ""
             )
+            if not self._is_valid_python(code):
+                _logger.warning(
+                    "LLM returned non-compiling code for %s %s, falling back",
+                    endpoint_data.get("method"),
+                    endpoint_data.get("resource_path"),
+                )
+                if self._fallback:
+                    return self._fallback.generate(endpoint_data)
+                raise RuntimeError("LLM returned code that fails to compile")
+            return code
         except Exception:
             if self._fallback:
                 return self._fallback.generate(endpoint_data)
             raise RuntimeError("LLM generation failed and no fallback configured")
+
+    @staticmethod
+    def _is_valid_python(code: str) -> bool:
+        """Return True when *code* parses as a Python module.
+
+        compile() only checks syntax, not name resolution, so a snippet that
+        references not-yet-imported names still passes. That is fine here:
+        the goal is to catch genuinely broken output before it lands in the
+        generated server file.
+        """
+        if not code.strip():
+            return False
+        try:
+            compile(code, "<generated>", "exec")
+            return True
+        except SyntaxError:
+            return False
 
     async def generate_async(self, endpoint_data: dict[str, Any]) -> str:
         loop = asyncio.get_running_loop()
