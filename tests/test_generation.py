@@ -140,6 +140,19 @@ class TestSmartRouteMultiField:
         route = build_route("POST", "/api/dup", responses, "post_api_dup", use_smart_fallback=True)
         assert "elif" not in route
 
+    def test_missing_field_keeps_its_own_branch(self):
+        # A request that omits the discriminating field must still get its own
+        # branch (body.get(...) is None), not be silently dropped so its
+        # response is unreachable behind the else fallback.
+        responses = [
+            {"request": {"body": '{"role": "admin"}'}, "status": 200, "body": '{"tier": "admin"}'},
+            {"request": {"body": '{}'}, "status": 200, "body": '{"tier": "guest"}'},
+        ]
+        route = build_route("POST", "/api/access", responses, "post_api_access", use_smart_fallback=True)
+        assert 'body.get("role") == "admin"' in route
+        assert 'body.get("role") is None' in route
+        compile(route, "<route>", "exec")
+
 
 def test_health_endpoints_in_generated_code(tmp_path, minimal_har_data):
     test_file = tmp_path / "test.har"

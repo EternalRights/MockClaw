@@ -286,12 +286,13 @@ def _generate_smart_route(
     first = True
     for req_data, status, resp_data in distinct:
         checks = [
-            f'body.get("{field}") == {json.dumps(req_data[field])}'
+            (
+                f'body.get("{field}") == {json.dumps(req_data[field])}'
+                if field in req_data
+                else f'body.get("{field}") is None'
+            )
             for field in fields
-            if field in req_data
         ]
-        if not checks:
-            continue
         condition = " and ".join(checks)
         if condition in emitted:
             continue
