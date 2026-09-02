@@ -12,6 +12,24 @@ from typing import Any
 
 _logger = logging.getLogger(__name__)
 
+# OpenAI wraps the underlying network failures in its own exception types
+# (APIConnectionError / APITimeoutError), both subclasses of APIError which
+# derives from Exception -- not from ConnectionError. Without including them
+# here, call_with_retry treats a flaky network as non-transient and raises
+# immediately instead of retrying with backoff.
+try:
+    from openai import APIConnectionError, APITimeoutError  # type: ignore[attr-defined]
+
+    _TRANSIENT_ERROR_TYPES: tuple[type[Exception], ...] = (
+        ConnectionError,
+        TimeoutError,
+        OSError,
+        APIConnectionError,
+        APITimeoutError,
+    )
+except ImportError:
+    _TRANSIENT_ERROR_TYPES = (ConnectionError, TimeoutError, OSError)
+
 
 class LLMClientManager:
     """Manages LLM client lifecycle with lazy loading, caching, and retries.
@@ -28,11 +46,7 @@ class LLMClientManager:
         request_timeout: Timeout in seconds for each API request.
     """
 
-    _TRANSIENT_ERRORS = (
-        ConnectionError,
-        TimeoutError,
-        OSError,
-    )
+    _TRANSIENT_ERRORS = _TRANSIENT_ERROR_TYPES
 
     def __init__(
         self,
