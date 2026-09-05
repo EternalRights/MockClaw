@@ -132,7 +132,10 @@ class HARParser:
         body = None
         if request.get('postData'):
             post_data = request['postData']
-            if post_data.get('mimeType') == 'application/json':
+            # HAR mimeType can carry parameters (e.g. "application/json;
+            # charset=utf-8"); a plain equality check would drop the body.
+            mime_type = (post_data.get('mimeType') or '').split(';')[0].strip().lower()
+            if mime_type == 'application/json':
                 body = post_data.get('text', '')
 
         return HTTPRequest(

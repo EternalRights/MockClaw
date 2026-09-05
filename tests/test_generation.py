@@ -489,6 +489,44 @@ class TestDuplicateEntryCollapse:
         assert len(endpoints[0].responses) == 2
 
 
+class TestPostDataBodyParsing:
+    """postData.mimeType carrying parameters must not drop the request body."""
+
+    def _entry(self, mime_type, text='{"msg": "hi"}'):
+        return {
+            "request": {
+                "method": "POST",
+                "url": "https://api.example.com/echo",
+                "headers": [],
+                "queryString": [],
+                "postData": {"mimeType": mime_type, "text": text},
+            },
+            "response": {
+                "status": 200,
+                "headers": [],
+                "content": {"mimeType": "application/json", "text": '{"ok": true}'},
+            },
+        }
+
+    def _parse(self, mime_type, text, tmp_path):
+        har = {"log": {"version": "1.2", "entries": [self._entry(mime_type, text)]}}
+        f = tmp_path / "test.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+        return HARParser(str(f)).get_endpoints()[0]
+
+    def test_plain_json_mime_type(self, tmp_path):
+        ep = self._parse("application/json", '{"msg": "hi"}', tmp_path)
+        assert ep.requests[0].body == '{"msg": "hi"}'
+
+    def test_json_with_charset_is_parsed(self, tmp_path):
+        ep = self._parse("application/json; charset=utf-8", '{"msg": "hi"}', tmp_path)
+        assert ep.requests[0].body == '{"msg": "hi"}'
+
+    def test_non_json_mime_type_ignored(self, tmp_path):
+        ep = self._parse("text/plain", "not json", tmp_path)
+        assert ep.requests[0].body is None
+
+
 class TestQueryRouteGeneration:
     """Query-param routes must survive hostile param names and values."""
 
