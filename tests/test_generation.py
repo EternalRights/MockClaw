@@ -2,6 +2,7 @@
 MockClaw Generation Tests
 """
 
+import ast
 import json
 
 import pytest
@@ -153,6 +154,28 @@ class TestSmartRouteMultiField:
         assert 'body.get("role") is None' in route
         compile(route, "<route>", "exec")
 
+    def test_null_field_value_is_valid_python(self):
+        # JSON null must render as Python None, not the NameError-prone
+        # bare `null` that json.dumps would emit.
+        responses = [
+            {"request": {"body": '{"role": null}'}, "status": 200, "body": '{"tier": "none"}'},
+            {"request": {"body": '{"role": "admin"}'}, "status": 200, "body": '{"tier": "admin"}'},
+        ]
+        route = build_route("POST", "/api/access", responses, "post_api_access", use_smart_fallback=True)
+        assert 'body.get("role") == None' in route
+        assert 'body.get("role") == "admin"' in route
+        compile(route, "<route>", "exec")
+
+    def test_boolean_field_value_is_valid_python(self):
+        responses = [
+            {"request": {"body": '{"enabled": true}'}, "status": 200, "body": '{"on": 1}'},
+            {"request": {"body": '{"enabled": false}'}, "status": 200, "body": '{"off": 1}'},
+        ]
+        route = build_route("POST", "/api/flag", responses, "post_api_flag", use_smart_fallback=True)
+        assert 'body.get("enabled") == True' in route
+        assert 'body.get("enabled") == False' in route
+        compile(route, "<route>", "exec")
+
 
 def test_health_endpoints_in_generated_code(tmp_path, minimal_har_data):
     test_file = tmp_path / "test.har"
@@ -301,7 +324,15 @@ class TestBodyLiteral:
 
     def test_null_value(self):
         result = body_literal("null")
-        assert result == "null"
+        assert result == "None"
+
+    def test_boolean_values_become_python_literals(self):
+        result = body_literal('{"active": true, "deleted": false}')
+        assert ast.literal_eval(result) == {"active": True, "deleted": False}
+
+    def test_nested_null_and_bool(self):
+        result = body_literal('{"meta": null, "items": [1, null, true]}')
+        assert ast.literal_eval(result) == {"meta": None, "items": [1, None, True]}
 
 
 class TestCodeExtractor:

@@ -11,13 +11,6 @@ import re
 from typing import Any
 from urllib.parse import urlparse, parse_qs
 
-try:
-    import orjson
-    HAS_ORJSON = True
-except ImportError:
-    orjson = None
-    HAS_ORJSON = False
-
 _STATUS_EXC = {
     400: "HTTP_400_BAD_REQUEST",
     401: "HTTP_401_UNAUTHORIZED",
@@ -47,13 +40,39 @@ _FB = "    "
 _logger = logging.getLogger(__name__)
 
 
+def _py_literal(value: Any) -> str:
+    """Render a JSON value as a runnable Python literal.
+
+    ``json.dumps`` (and ``orjson``) emit ``null``/``true``/``false`` which are
+    not Python literals and would NameError inside generated route code. Recurse
+    through the value so nested dicts/lists come out as valid Python too.
+    """
+    if value is None:
+        return "None"
+    if value is True:
+        return "True"
+    if value is False:
+        return "False"
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_py_literal(v) for v in value) + "]"
+    if isinstance(value, dict):
+        items = ", ".join(
+            f"{json.dumps(k, ensure_ascii=False)}: {_py_literal(v)}"
+            for k, v in value.items()
+        )
+        return "{" + items + "}"
+    return json.dumps(value, ensure_ascii=False)
+
+
 def body_literal(body_text: str) -> str:
-    """Compact JSON string literal from raw HAR body text."""
+    """Compact Python literal from raw HAR body text."""
     try:
         parsed = json.loads(body_text)
-        if HAS_ORJSON:
-            return orjson.dumps(parsed).decode('utf-8')
-        return json.dumps(parsed, ensure_ascii=False)
+        return _py_literal(parsed)
     except (json.JSONDecodeError, TypeError) as exc:
         _logger.debug("body_literal: non-JSON body, returning raw string: %s", exc)
         return json.dumps(body_text)
@@ -287,7 +306,7 @@ def _generate_smart_route(
     for req_data, status, resp_data in distinct:
         checks = [
             (
-                f'body.get("{field}") == {json.dumps(req_data[field])}'
+                f'body.get("{field}") == {_py_literal(req_data[field])}'
                 if field in req_data
                 else f'body.get("{field}") is None'
             )
