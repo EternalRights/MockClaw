@@ -594,6 +594,34 @@ class TestQueryRouteGeneration:
         assert "category: str" in route
         assert "page: str" in route
 
+    def test_conditional_routing_by_query_param(self):
+        responses = [
+            {"status": 200, "body": '{"result": "success"}', "request": {"query_params": {"mode": "success"}}},
+            {"status": 500, "body": '{"error": "boom"}', "request": {"query_params": {"mode": "error"}}},
+        ]
+        request = {"query_params": {"mode": "success"}}
+        route = build_route(
+            "GET", "/api/search", responses, "get_api_search",
+            use_smart_fallback=True, sample_request=request,
+        )
+        assert 'if mode == "success"' in route
+        assert 'elif mode == "error"' in route
+        compile(route, "<route>", "exec")
+
+    def test_conditional_routing_joins_multiple_params(self):
+        responses = [
+            {"status": 200, "body": '{"tier": "us"}', "request": {"query_params": {"role": "admin", "region": "us"}}},
+            {"status": 200, "body": '{"tier": "eu"}', "request": {"query_params": {"role": "admin", "region": "eu"}}},
+            {"status": 200, "body": '{"tier": "basic"}', "request": {"query_params": {"role": "user", "region": "us"}}},
+        ]
+        request = {"query_params": {"role": "admin", "region": "us"}}
+        route = build_route(
+            "GET", "/api/perm", responses, "get_api_perm",
+            use_smart_fallback=True, sample_request=request,
+        )
+        assert " and " in route
+        compile(route, "<route>", "exec")
+
 
 class TestLLMCodeValidation:
     """LLM output that fails to compile must never reach the mock file."""

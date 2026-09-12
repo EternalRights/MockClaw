@@ -378,9 +378,10 @@ def _generate_query_route(
 ) -> str:
     """Generate route with query parameter support for GET endpoints.
 
-    For GET endpoints with query parameters, generates a route that
-    properly accepts those parameters as FastAPI function arguments
-    and supports conditional routing based on parameter values.
+    For GET endpoints with query parameters, generates a route that accepts
+    those parameters as FastAPI function arguments and, when multiple
+    responses are observed, emits conditional branches keyed on the
+    parameter values that separate them.
     """
     latency = _latency_line(latency_ms)
 
@@ -392,6 +393,24 @@ def _generate_query_route(
         return build_route(method, path, all_responses, func_name, use_smart_fallback=False, latency_ms=latency_ms)
 
     param_names = list(query_params.keys())
+
+    # Collect each response's query params and find the fields that separate
+    # them, mirroring the body-based smart routing logic.
+    distinct: list[tuple[dict[str, Any], int, str]] = []
+    for resp in all_responses:
+        qp = resp.get("request", {}).get("query_params", {})
+        if qp:
+            distinct.append((qp, resp.get("status", 200), resp.get("body") or "{}"))
+
+    distinct = _dedupe_requests(distinct)
+
+    all_fields: list[str] = []
+    for qp, _, _ in distinct:
+        for field in qp:
+            if field not in all_fields:
+                all_fields.append(field)
+
+    fields = _select_discriminating_fields(distinct, all_fields) if len(distinct) >= 2 else []
 
     lines = [
         f'@app.{method.lower()}("{path}")',
@@ -405,28 +424,67 @@ def _generate_query_route(
         default_literal = json.dumps(str(default_val))
         lines.append(f"{_FB}{_safe_param_name(param)}: str = {default_literal},")
     lines.append(f"):")
-    lines.append(f'{_FB}"""Mock endpoint with query parameter support."""')
-
-    sc0 = all_responses[0].get("status", 200)
-    body0 = body_literal(all_responses[0].get("body") or "{}")
 
     if len(all_responses) > 1:
-        doc_parts = [f'{_FB}"""Mock endpoint with query parameter support.']
+        lines.append(f'{_FB}"""Mock endpoint with query parameter support.')
         for i, resp in enumerate(all_responses, start=1):
             sc = resp.get("status", 200)
             preview = (resp.get("body") or "")[:60]
-            doc_parts.append(f'{_FB}  [{i}] status {sc}: {preview}')
-        doc_parts.append(f'{_FB}"""')
-        lines.extend(doc_parts)
+            lines.append(f'{_FB}  [{i}] status {sc}: {preview}')
+        lines.append(f'{_FB}"""')
+    else:
+        lines.append(f'{_FB}"""Mock endpoint with query parameter support."""')
 
     if latency:
         lines.append(latency.rstrip("\n"))
 
-    if 400 <= sc0 < 600:
-        exc = _STATUS_EXC.get(sc0, f"HTTP_{sc0}_ERROR")
-        lines.append(f'{_FB}raise HTTPException(status_code=status.{exc}, detail={body0})')
+    if fields:
+        emitted: set[str] = set()
+        first = True
+        for qp, status_, resp_body in distinct:
+            checks = [
+                f'{_safe_param_name(field)} == {_py_literal(qp[field])}'
+                for field in fields
+                if field in qp
+            ]
+            if not checks:
+                continue
+            condition = " and ".join(checks)
+            if condition in emitted:
+                continue
+            emitted.add(condition)
+
+            keyword = "if" if first else "elif"
+            first = False
+            lines.append(f"{_FB}{keyword} {condition}:")
+
+            resp_literal = body_literal(resp_body)
+            if 400 <= status_ < 600:
+                exc = _STATUS_EXC.get(status_, "HTTP_500_INTERNAL_SERVER_ERROR")
+                lines.append(f'{_FB}    raise HTTPException(status_code=status.{exc}, detail={resp_literal})')
+            else:
+                lines.append(f'{_FB}    return {resp_literal}')
+
+        default_response = next(
+            (resp for resp in all_responses if 200 <= resp.get("status", 200) < 300),
+            all_responses[0],
+        )
+        default_status = default_response.get("status", 200)
+        default_literal = body_literal(default_response.get("body") or "{}")
+        lines.append(f'{_FB}else:')
+        if 400 <= default_status < 600:
+            exc = _STATUS_EXC.get(default_status, "HTTP_500_INTERNAL_SERVER_ERROR")
+            lines.append(f'{_FB}    raise HTTPException(status_code=status.{exc}, detail={default_literal})')
+        else:
+            lines.append(f'{_FB}    return {default_literal}')
     else:
-        lines.append(f'{_FB}return {body0}')
+        sc0 = all_responses[0].get("status", 200)
+        body0 = body_literal(all_responses[0].get("body") or "{}")
+        if 400 <= sc0 < 600:
+            exc = _STATUS_EXC.get(sc0, f"HTTP_{sc0}_ERROR")
+            lines.append(f'{_FB}raise HTTPException(status_code=status.{exc}, detail={body0})')
+        else:
+            lines.append(f'{_FB}return {body0}')
 
     return "\n".join(lines) + "\n"
 

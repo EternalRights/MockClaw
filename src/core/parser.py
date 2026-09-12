@@ -248,6 +248,7 @@ class HARParser:
                             "content_type": r.content_type,
                             "request": {
                                 "body": ep.requests[i].body if i < len(ep.requests) and ep.requests[i].body else None,
+                                "query_params": ep.requests[i].query_params if i < len(ep.requests) else {},
                             } if ep.requests else None,
                         }
                         for i, r in enumerate(ep.responses)
