@@ -622,6 +622,22 @@ class TestQueryRouteGeneration:
         assert " and " in route
         compile(route, "<route>", "exec")
 
+    def test_reserved_import_name_is_suffixed(self):
+        # A query param named "status" would shadow FastAPI's status module
+        # and break the raise branch; it must be emitted as status_ instead.
+        responses = [
+            {"status": 200, "body": '{"ok": true}', "request": {"query_params": {"status": "ok"}}},
+            {"status": 500, "body": '{"err": 1}', "request": {"query_params": {"status": "bad"}}},
+        ]
+        request = {"query_params": {"status": "ok"}}
+        route = build_route(
+            "GET", "/api/healthz", responses, "get_api_healthz",
+            use_smart_fallback=True, sample_request=request,
+        )
+        assert "status_: str" in route
+        assert "status.HTTP_500" in route
+        compile(route, "<route>", "exec")
+
 
 class TestLLMCodeValidation:
     """LLM output that fails to compile must never reach the mock file."""

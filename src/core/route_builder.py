@@ -352,18 +352,29 @@ _KEYWORDS = frozenset({
     "async", "assert", "break", "continue", "finally", "nonlocal",
 })
 
+# Names already bound in the generated mock server module (see the header
+# template in generator.py). A query parameter using one of these would
+# shadow the import and break e.g. status.HTTP_400_... inside a raise branch.
+_RESERVED_NAMES = _KEYWORDS | {
+    "FastAPI", "HTTPException", "status", "Request", "Response",
+    "JSONResponse", "CORSMiddleware", "BaseHTTPMiddleware", "Any",
+    "asyncio", "time", "json", "defaultdict", "app",
+}
+
 
 def _safe_param_name(name: str) -> str:
     """Turn a query parameter name into a valid Python argument name.
 
     HAR captures can contain names like ``user-id``, ``filter[]`` or
     straight-up Python keywords (``class``). None of those survive as
-    function arguments, so sanitize and de-keyword them.
+    function arguments, so sanitize and de-keyword them. Names that the
+    generated module already imports (``status``, ``app``, ...) are also
+    suffixed so the parameter does not shadow them.
     """
     safe = re.sub(r"\W", "_", name)
     if not safe or safe[0].isdigit():
         safe = f"q_{safe}"
-    if safe in _KEYWORDS:
+    if safe in _RESERVED_NAMES:
         safe = f"{safe}_"
     return safe
 
