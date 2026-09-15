@@ -558,6 +558,32 @@ class TestPostDataBodyParsing:
         assert ep.requests[0].body is None
 
 
+class TestNullFieldTolerance:
+    """HAR exports null out fields the spec marks required; don't blow up."""
+
+    def _parse(self, har, tmp_path):
+        f = tmp_path / "test.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+        return HARParser(str(f)).get_endpoints()
+
+    def test_null_headers_query_string_and_content(self, tmp_path):
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET", "url": "https://api.example.com/users",
+                        "headers": None, "queryString": None, "postData": None},
+            "response": {"status": 200, "headers": None, "content": None},
+        }]}}
+        endpoints = self._parse(har, tmp_path)
+        assert len(endpoints) == 1
+        assert endpoints[0].requests[0].headers == {}
+        assert endpoints[0].requests[0].query_params == {}
+
+    def test_null_log_yields_no_endpoints(self, tmp_path):
+        assert self._parse({"log": None}, tmp_path) == []
+
+    def test_null_entries_yields_no_endpoints(self, tmp_path):
+        assert self._parse({"log": {"entries": None}}, tmp_path) == []
+
+
 class TestQueryRouteGeneration:
     """Query-param routes must survive hostile param names and values."""
 

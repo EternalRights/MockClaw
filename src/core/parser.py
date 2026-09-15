@@ -73,12 +73,12 @@ class HARParser:
         """Load and parse the HAR file."""
         with open(self.har_file_path, 'r', encoding='utf-8') as f:
             har_data = json.load(f)
-        self.entries = har_data.get('log', {}).get('entries', [])
+        self.entries = (har_data.get('log') or {}).get('entries') or []
         return har_data
 
     def _is_static_asset(self, entry: dict) -> bool:
         """Check if the entry is a static asset to filter out."""
-        request = entry.get('request', {})
+        request = entry.get('request') or {}
         url = request.get('url', '')
 
         # Parse the path out of the URL before taking the extension so that
@@ -89,8 +89,8 @@ class HARParser:
         if ext in STATIC_URL_EXTENSIONS:
             return True
 
-        response = entry.get('response', {})
-        content = response.get('content', {})
+        response = entry.get('response') or {}
+        content = response.get('content') or {}
         mime_type = content.get('mimeType', '').lower()
 
         for prefix in STATIC_MIME_PREFIXES:
@@ -108,10 +108,10 @@ class HARParser:
         path = ID_PATTERN.sub('/{id}', path)
         return path or '/'
 
-    def _parse_headers(self, headers: list) -> dict:
+    def _parse_headers(self, headers: list | None) -> dict:
         """Convert headers list to dictionary."""
         result = {}
-        for h in headers:
+        for h in headers or []:
             name = h.get('name')
             if name:
                 result[name.lower()] = h.get('value', '')
@@ -119,10 +119,10 @@ class HARParser:
 
     def _parse_request(self, entry: dict) -> HTTPRequest:
         """Parse a HAR entry's request."""
-        request = entry.get('request', {})
+        request = entry.get('request') or {}
         url = request.get('url', '')
 
-        query_params = request.get('queryString', [])
+        query_params = request.get('queryString') or []
         query_dict = {}
         for p in query_params:
             name = p.get('name')
@@ -148,11 +148,11 @@ class HARParser:
 
     def _parse_response(self, entry: dict) -> HTTPResponse:
         """Parse a HAR entry's response."""
-        response = entry.get('response', {})
-        content = response.get('content', {})
+        response = entry.get('response') or {}
+        content = response.get('content') or {}
 
         content_type = None
-        for header in response.get('headers', []):
+        for header in response.get('headers') or []:
             if header.get('name', '').lower() == 'content-type':
                 content_type = header.get('value')
                 break
