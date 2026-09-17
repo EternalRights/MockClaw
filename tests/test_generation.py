@@ -4,6 +4,7 @@ MockClaw Generation Tests
 
 import ast
 import json
+from typing import Any
 
 import pytest
 
@@ -663,6 +664,133 @@ class TestQueryRouteGeneration:
         assert "status_: str" in route
         assert "status.HTTP_500" in route
         compile(route, "<route>", "exec")
+
+
+def _serve(route: str, method: str, path: str, **kwargs):
+    """Exec a generated route into a throwaway app and issue one request.
+
+    Compiling a route only proves it parses; booting it and reading the real
+    response is what catches undefined names and invented constants.
+    """
+    from fastapi import FastAPI, HTTPException, Request, Response, status
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    exec(
+        compile(route, "<route>", "exec"),
+        {
+            "app": app,
+            "HTTPException": HTTPException,
+            "Request": Request,
+            "Response": Response,
+            "status": status,
+            "Any": Any,
+        },
+    )
+    with TestClient(app, raise_server_exceptions=False) as client:
+        return client.request(method, path, **kwargs)
+
+
+class TestStatusCodeRendering:
+    """A recorded status must survive into the generated raise statement."""
+
+    def test_unmapped_status_is_not_silently_remapped(self):
+        # 418 used to fall through to HTTP_500_INTERNAL_SERVER_ERROR, so the
+        # mock answered 500 for a recorded 418.
+        route = build_route(
+            "POST", "/api/teapot", [{"status": 418, "body": '{"e": 1}'}],
+            "post_api_teapot",
+        )
+        assert "status_code=418" in route
+        assert "HTTP_500" not in route
+
+    def test_unmapped_status_does_not_invent_a_constant(self):
+        # A single-response query route used to emit status.HTTP_418_ERROR,
+        # an attribute fastapi.status does not have.
+        responses = [
+            {"status": 418, "body": '{"e": 1}', "request": {"query_params": {"q": "1"}}},
+            {"status": 200, "body": '{"ok": 1}'},
+        ]
+        route = build_route(
+            "GET", "/api/teapot", responses, "get_api_teapot",
+            use_smart_fallback=True, sample_request={"query_params": {"q": "1"}},
+        )
+        assert "HTTP_418_ERROR" not in route
+        assert "status_code=418" in route
+
+    def test_mapped_status_keeps_named_constant(self):
+        route = build_route(
+            "GET", "/api/thing", [{"status": 404, "body": '{"e": 1}'}],
+            "get_api_thing",
+        )
+        assert "status_code=status.HTTP_404_NOT_FOUND" in route
+
+    def test_smart_route_unmapped_status_uses_int_literal(self):
+        responses = [
+            {"status": 200, "body": '{"p": "a"}', "request": {"body": '{"role": "a"}'}},
+            {"status": 418, "body": '{"p": "b"}', "request": {"body": '{"role": "b"}'}},
+            {"status": 418, "body": '{"p": "c"}', "request": {"body": '{"role": "c"}'}},
+        ]
+        route = build_route(
+            "POST", "/api/x", responses, "post_api_x", use_smart_fallback=True,
+        )
+        assert "status.HTTP_418" not in route
+        assert "status_code=418" in route
+
+
+class TestGeneratedRouteRuntime:
+    """Generated routes must run, not merely compile."""
+
+    def test_unmapped_status_is_served_verbatim(self):
+        route = build_route(
+            "POST", "/api/teapot", [{"status": 418, "body": '{"e": "teapot"}'}],
+            "post_api_teapot",
+        )
+        resp = _serve(route, "POST", "/api/teapot")
+        assert resp.status_code == 418, resp.text
+
+    def test_query_route_unmapped_status_is_served_verbatim(self):
+        responses = [
+            {"status": 418, "body": '{"e": 1}', "request": {"query_params": {"q": "1"}}},
+            {"status": 200, "body": '{"ok": 1}'},
+        ]
+        route = build_route(
+            "GET", "/api/teapot", responses, "get_api_teapot",
+            use_smart_fallback=True, sample_request={"query_params": {"q": "1"}},
+        )
+        resp = _serve(route, "GET", "/api/teapot")
+        assert resp.status_code == 418, resp.text
+
+    def test_branch_on_unsampled_query_param_runs(self):
+        # "sort" only appears in the second response, so the branch tested a
+        # name that was never a function argument -> NameError at runtime.
+        responses = [
+            {"status": 200, "body": '{"tier": "a"}',
+             "request": {"query_params": {"page": "1"}}},
+            {"status": 200, "body": '{"tier": "b"}',
+             "request": {"query_params": {"page": "1", "sort": "desc"}}},
+        ]
+        route = build_route(
+            "GET", "/api/list", responses, "get_api_list",
+            use_smart_fallback=True, sample_request={"query_params": {"page": "1"}},
+        )
+        resp = _serve(route, "GET", "/api/list", params={"page": "1", "sort": "desc"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"tier": "b"}
+
+    def test_smart_route_condition_matches_second_branch(self):
+        responses = [
+            {"status": 200, "body": '{"ok": true}', "request": {"body": '{"role": "admin"}'}},
+            {"status": 403, "body": '{"err": "nope"}', "request": {"body": '{"role": "guest"}'}},
+        ]
+        route = build_route(
+            "POST", "/api/perm", responses, "post_api_perm", use_smart_fallback=True,
+        )
+        allowed = _serve(route, "POST", "/api/perm", json={"role": "admin"})
+        assert allowed.status_code == 200, allowed.text
+        denied = _serve(route, "POST", "/api/perm", json={"role": "guest"})
+        assert denied.status_code == 403, denied.text
+        assert denied.json() == {"detail": {"err": "nope"}}
 
 
 class TestLLMCodeValidation:

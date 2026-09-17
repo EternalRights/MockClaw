@@ -40,6 +40,20 @@ _FB = "    "
 _logger = logging.getLogger(__name__)
 
 
+def _status_ref(code: int) -> str:
+    """Render a status code as an expression usable inside generated code.
+
+    Prefers ``fastapi.status.HTTP_*`` when the constant is known, otherwise
+    falls back to the plain integer. Two wrong turns are avoided here: naming
+    an unmapped code ``status.HTTP_418_ERROR`` invents an attribute that does
+    not exist (``AttributeError`` at runtime), and substituting a default
+    constant like ``HTTP_500_INTERNAL_SERVER_ERROR`` for an unmapped code
+    silently changes the mock's response status.
+    """
+    name = _STATUS_EXC.get(code)
+    return f"status.{name}" if name else str(code)
+
+
 def _py_literal(value: Any) -> str:
     """Render a JSON value as a runnable Python literal.
 
@@ -146,8 +160,9 @@ def build_route(
     body0 = body_literal(all_responses[0].get("body") or "")
 
     if 400 <= sc0 < 600:
-        exc = _STATUS_EXC.get(sc0, "HTTP_500_INTERNAL_SERVER_ERROR")
-        body_code = f"{_FB}raise HTTPException(status_code=status.{exc},detail={body0})"
+        body_code = (
+            f"{_FB}raise HTTPException(status_code={_status_ref(sc0)},detail={body0})"
+        )
     else:
         body_code = f"{_FB}return {body0}"
 
@@ -322,9 +337,8 @@ def _generate_smart_route(
         lines.append(f"{_FB}{keyword} {condition}:")
 
         if 400 <= status < 600:
-            exc = _STATUS_EXC.get(status, "HTTP_500_INTERNAL_SERVER_ERROR")
             resp_literal = body_literal(json.dumps(resp_data))
-            lines.append(f'{_FB}    raise HTTPException(status_code=status.{exc}, detail={resp_literal})')
+            lines.append(f'{_FB}    raise HTTPException(status_code={_status_ref(status)}, detail={resp_literal})')
         else:
             resp_literal = body_literal(json.dumps(resp_data))
             lines.append(f'{_FB}    return {resp_literal}')
@@ -337,8 +351,7 @@ def _generate_smart_route(
     default_status = default_response.get("status", 200)
     lines.append(f'{_FB}else:')
     if 400 <= default_status < 600:
-        exc = _STATUS_EXC.get(default_status, "HTTP_500_INTERNAL_SERVER_ERROR")
-        lines.append(f'{_FB}    raise HTTPException(status_code=status.{exc}, detail={body_literal(default_resp)})')
+        lines.append(f'{_FB}    raise HTTPException(status_code={_status_ref(default_status)}, detail={body_literal(default_resp)})')
     else:
         lines.append(f'{_FB}    return {body_literal(default_resp)}')
 
@@ -403,8 +416,6 @@ def _generate_query_route(
     if not query_params:
         return build_route(method, path, all_responses, func_name, use_smart_fallback=False, latency_ms=latency_ms)
 
-    param_names = list(query_params.keys())
-
     # Collect each response's query params and find the fields that separate
     # them, mirroring the body-based smart routing logic.
     distinct: list[tuple[dict[str, Any], int, str]] = []
@@ -423,13 +434,21 @@ def _generate_query_route(
 
     fields = _select_discriminating_fields(distinct, all_fields) if len(distinct) >= 2 else []
 
+    # Declare the sampled params plus any key a branch might test. A later
+    # response can carry query keys the sampled request did not, and a branch
+    # referencing an undeclared name would NameError in the generated server.
+    param_names = list(query_params.keys())
+    for field in all_fields:
+        if field not in param_names:
+            param_names.append(field)
+
     lines = [
         f'@app.{method.lower()}("{path}")',
         f"async def {func_name}(",
     ]
 
     for param in param_names:
-        default_val = query_params[param]
+        default_val = query_params.get(param, "")
         # json.dumps handles quotes/backslashes/newlines inside the value;
         # a plain f-string interpolation would emit broken Python.
         default_literal = json.dumps(str(default_val))
@@ -471,8 +490,7 @@ def _generate_query_route(
 
             resp_literal = body_literal(resp_body)
             if 400 <= status_ < 600:
-                exc = _STATUS_EXC.get(status_, "HTTP_500_INTERNAL_SERVER_ERROR")
-                lines.append(f'{_FB}    raise HTTPException(status_code=status.{exc}, detail={resp_literal})')
+                lines.append(f'{_FB}    raise HTTPException(status_code={_status_ref(status_)}, detail={resp_literal})')
             else:
                 lines.append(f'{_FB}    return {resp_literal}')
 
@@ -484,16 +502,14 @@ def _generate_query_route(
         default_literal = body_literal(default_response.get("body") or "{}")
         lines.append(f'{_FB}else:')
         if 400 <= default_status < 600:
-            exc = _STATUS_EXC.get(default_status, "HTTP_500_INTERNAL_SERVER_ERROR")
-            lines.append(f'{_FB}    raise HTTPException(status_code=status.{exc}, detail={default_literal})')
+            lines.append(f'{_FB}    raise HTTPException(status_code={_status_ref(default_status)}, detail={default_literal})')
         else:
             lines.append(f'{_FB}    return {default_literal}')
     else:
         sc0 = all_responses[0].get("status", 200)
         body0 = body_literal(all_responses[0].get("body") or "{}")
         if 400 <= sc0 < 600:
-            exc = _STATUS_EXC.get(sc0, f"HTTP_{sc0}_ERROR")
-            lines.append(f'{_FB}raise HTTPException(status_code=status.{exc}, detail={body0})')
+            lines.append(f'{_FB}raise HTTPException(status_code={_status_ref(sc0)}, detail={body0})')
         else:
             lines.append(f'{_FB}return {body0}')
 
