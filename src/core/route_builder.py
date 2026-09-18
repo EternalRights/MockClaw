@@ -114,6 +114,25 @@ def _latency_line(latency_ms: int, indent: str = _FB) -> str:
     return f"{indent}await asyncio.sleep({seconds:.3f})\n"
 
 
+# Verbs FastAPI's app exposes a decorator helper for. Anything else -- WebDAV's
+# PROPFIND/MKCOL, for instance -- has no such attribute, so emitting
+# ``@app.propfind(...)`` kills the whole generated module with AttributeError
+# on import, taking every other route down with it.
+_APP_VERBS = frozenset({
+    "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE",
+})
+
+
+def _route_decorator(method: str, path: str) -> str:
+    """Build the decorator line that registers *path* under *method*.
+
+    Falls back to ``api_route`` for methods FastAPI has no shorthand for.
+    """
+    if method in _APP_VERBS:
+        return f'@app.{method.lower()}("{path}")'
+    return f'@app.api_route("{path}", methods=["{method}"])'
+
+
 def build_route(
     method: str,
     path: str,
@@ -157,7 +176,7 @@ def build_route(
 
     if not all_responses:
         return (
-            f'@app.{method.lower()}("{path}")\n'
+            _route_decorator(method, path) + "\n"
             f"async def {func_name}():\n"
             f'{_FB}"""Mock endpoint -- no HAR response data."""\n'
             f"{latency}"
@@ -176,7 +195,7 @@ def build_route(
 
     if len(all_responses) > 1:
         lines = [
-            f'@app.{method.lower()}("{path}")',
+            _route_decorator(method, path),
             f"async def {func_name}():",
             f'{_FB}"""Mock endpoint -- {len(all_responses)} HAR scenarios recorded.',
         ]
@@ -191,7 +210,7 @@ def build_route(
         return "\n".join(lines) + "\n"
 
     return (
-        f'@app.{method.lower()}("{path}")\n'
+        _route_decorator(method, path) + "\n"
         f"async def {func_name}():\n"
         f'{_FB}"""Mock endpoint -- HAR status {sc0}."""\n'
         f"{latency}"
@@ -315,7 +334,7 @@ def _generate_smart_route(
         return build_route(method, path, all_responses, func_name, use_smart_fallback=False, latency_ms=latency_ms)
 
     lines = [
-        f'@app.{method.lower()}("{path}")',
+        _route_decorator(method, path),
         f"async def {func_name}(request: Request):",
         f'{_FB}"""Smart mock endpoint with conditional routing."""',
     ]
@@ -451,7 +470,7 @@ def _generate_query_route(
             param_names.append(field)
 
     lines = [
-        f'@app.{method.lower()}("{path}")',
+        _route_decorator(method, path),
         f"async def {func_name}(",
     ]
 

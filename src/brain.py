@@ -4,6 +4,7 @@ Provides REST API for the dashboard.
 """
 
 import os
+import re
 import sys
 import json
 import tempfile
@@ -23,9 +24,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
+# '%(levelname)' used to be missing its 's', so every log call raised
+# ValueError inside the formatter and dumped a "--- Logging error ---"
+# traceback to stderr instead of logging anything.
+_LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname) - %(message)s'
+    format=_LOG_FORMAT
 )
 logger = logging.getLogger(__name__)
 
@@ -37,6 +43,9 @@ from _version import get_version
 
 APP_VERSION = get_version()
 START_TIME = time.time()
+
+# RFC 7230 token characters: what a request method may legally consist of.
+_METHOD_TOKEN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 
 class AppState:
@@ -130,10 +139,13 @@ class EndpointInfo(BaseModel):
     @field_validator('method')
     @classmethod
     def validate_method(cls, v):
-        allowed = {'GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'}
-        if v.upper() not in allowed:
+        # Any syntactically valid HTTP method is accepted, not just the handful
+        # FastAPI has decorators for. Rejecting the rest here failed the entire
+        # upload: one WebDAV entry turned the whole /parse request into a 500.
+        method = (v or "").strip().upper()
+        if not _METHOD_TOKEN.match(method):
             raise ValueError(f"Invalid HTTP method: {v}")
-        return v.upper()
+        return method
 
 
 class GenerateRequest(BaseModel):
@@ -225,7 +237,7 @@ async def mockclaw_info():
 async def parse_har_file(file: UploadFile = File(...)):
     start_time = time.time()
 
-    if not file.filename or not file.filename.endswith('.har'):
+    if not file.filename or not file.filename.lower().endswith('.har'):
         raise HTTPException(status_code=400, detail="File must have .har extension")
 
     content = await file.read()

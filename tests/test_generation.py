@@ -670,6 +670,74 @@ class TestMethodNormalization:
         assert 'if mode == "a"' in route
 
 
+class TestNonStandardMethodRouting:
+    """Verbs FastAPI has no decorator for must still produce a runnable route."""
+
+    def test_standard_verb_uses_shorthand(self):
+        route = build_route(
+            "GET", "/api/x", [{"status": 200, "body": '{"ok": 1}'}], "get_api_x",
+        )
+        assert route.startswith('@app.get("/api/x")')
+
+    def test_non_standard_verb_uses_api_route(self):
+        # @app.propfind(...) does not exist; the whole generated module used
+        # to die with AttributeError on import because of it.
+        route = build_route(
+            "PROPFIND", "/api/dav", [{"status": 207, "body": '{"dav": 1}'}], "f",
+        )
+        assert route.startswith('@app.api_route("/api/dav", methods=["PROPFIND"])')
+
+    def test_multi_response_route_uses_api_route(self):
+        route = build_route(
+            "MKCOL", "/api/col",
+            [{"status": 201, "body": '{"a": 1}'}, {"status": 405, "body": '{"e": 1}'}],
+            "f",
+        )
+        assert 'methods=["MKCOL"]' in route
+
+    def test_query_route_uses_api_route(self):
+        responses = [
+            {"status": 200, "body": '{"r": 1}', "request": {"query_params": {"m": "a"}}},
+            {"status": 200, "body": '{"r": 2}', "request": {"query_params": {"m": "b"}}},
+        ]
+        route = build_route(
+            "PROPFIND", "/api/dav", responses, "f",
+            use_smart_fallback=True, sample_request={"query_params": {"m": "a"}},
+        )
+        assert 'methods=["PROPFIND"]' in route
+
+    def test_webdav_route_boots_and_serves(self):
+        route = build_route(
+            "PROPFIND", "/api/dav", [{"status": 207, "body": '{"dav": 1}'}], "f",
+        )
+        resp = _serve(route, "PROPFIND", "/api/dav")
+        # The recorded 207 is not replayed verbatim yet: non-error codes other
+        # than 200 currently come back as 200. Asserting the body here keeps
+        # this test on the decorator, not on that separate gap.
+        assert resp.status_code < 400, resp.text
+        assert resp.json() == {"dav": 1}
+
+    def test_generated_module_with_webdav_method_imports(self, tmp_path):
+        entries = [
+            TestMethodNormalization._entry("GET", "https://api.example.com/a"),
+            TestMethodNormalization._entry(
+                "PROPFIND", "https://api.example.com/dav", body='{"dav": 1}',
+            ),
+        ]
+        har = {"log": {"version": "1.2", "entries": entries}}
+        f = tmp_path / "test.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+        data = HARParser(str(f)).export_as_dict()
+
+        out_dir = tmp_path / "out"
+        MockGenerator(use_smart_fallback=False).generate_all(
+            data["endpoints"], output_dir=str(out_dir),
+        )
+        src = (out_dir / "dynamic_api.py").read_text(encoding="utf-8")
+        assert 'methods=["PROPFIND"]' in src
+        compile(src, "dynamic_api.py", "exec")
+
+
 class TestQueryRouteGeneration:
     """Query-param routes must survive hostile param names and values."""
 
