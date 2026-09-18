@@ -134,6 +134,10 @@ def build_route(
     If *latency_ms* is positive, injects an ``await asyncio.sleep()`` into the
     handler to mimic the original response time recorded in the HAR file.
     """
+    # Direct callers may hand over "post" rather than "POST"; the smart-router
+    # guards below compare against upper-case names.
+    method = (method or "").strip().upper()
+
     latency = _latency_line(latency_ms)
 
     has_request_body = any(

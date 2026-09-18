@@ -27,6 +27,19 @@ UUID_PATTERN = re.compile(r'/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-
 ID_PATTERN = re.compile(r'/[0-9]+(?=/|$)')
 
 
+def _normalize_method(value: object) -> str:
+    """Canonicalize an HTTP method coming out of a HAR file.
+
+    Not every exporter writes ``GET``; hand-edited and tool-generated
+    archives turn up as ``get`` or ``Get``. Everything downstream -- endpoint
+    grouping, the smart-router guards, the function-name builder -- assumes
+    the upper-case spelling, so a lower-case method silently loses conditional
+    routing and splits one resource into two duplicate routes.
+    """
+    method = str(value).strip().upper() if value else ''
+    return method or 'GET'
+
+
 @dataclass
 class HTTPRequest:
     """Represents a parsed HTTP request."""
@@ -140,7 +153,7 @@ class HARParser:
 
         return HTTPRequest(
             url=url,
-            method=request.get('method', 'GET'),
+            method=_normalize_method(request.get('method')),
             headers=self._parse_headers(request.get('headers', [])),
             query_params=query_dict,
             body=body

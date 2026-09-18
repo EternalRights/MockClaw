@@ -585,6 +585,91 @@ class TestNullFieldTolerance:
         assert self._parse({"log": {"entries": None}}, tmp_path) == []
 
 
+class TestMethodNormalization:
+    """HAR methods are not guaranteed upper-case; downstream assumes they are."""
+
+    @staticmethod
+    def _entry(method, url, body='{"ok": true}', req_body=None):
+        entry = {
+            "request": {
+                "method": method, "url": url, "headers": [], "queryString": [],
+            },
+            "response": {
+                "status": 200, "headers": [],
+                "content": {"mimeType": "application/json", "text": body},
+            },
+        }
+        if req_body is not None:
+            entry["request"]["postData"] = {
+                "mimeType": "application/json", "text": req_body,
+            }
+        return entry
+
+    def _parser(self, entries, tmp_path):
+        har = {"log": {"version": "1.2", "entries": entries}}
+        f = tmp_path / "test.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+        return HARParser(str(f))
+
+    def test_lowercase_method_is_upper_cased(self, tmp_path):
+        parser = self._parser(
+            [self._entry("get", "https://api.example.com/a")], tmp_path,
+        )
+        assert parser.get_endpoints()[0].method == "GET"
+
+    def test_mixed_case_methods_merge_into_one_endpoint(self, tmp_path):
+        # "GET" and "get" used to become two endpoints, so the generated
+        # module emitted the same route twice and only one ever served.
+        entries = [
+            self._entry("GET", "https://api.example.com/dup"),
+            self._entry("get", "https://api.example.com/dup", body='{"second": true}'),
+        ]
+        endpoints = self._parser(entries, tmp_path).get_endpoints()
+        assert len(endpoints) == 1
+        assert len(endpoints[0].responses) == 2
+
+    def test_missing_method_defaults_to_get(self, tmp_path):
+        entry = self._entry("GET", "https://api.example.com/a")
+        del entry["request"]["method"]
+        assert self._parser([entry], tmp_path).get_endpoints()[0].method == "GET"
+
+    def test_generated_module_has_one_route_per_resource(self, tmp_path):
+        entries = [
+            self._entry("GET", "https://api.example.com/dup"),
+            self._entry("get", "https://api.example.com/dup", body='{"second": true}'),
+        ]
+        data = self._parser(entries, tmp_path).export_as_dict()
+        out_dir = tmp_path / "out"
+        MockGenerator(use_smart_fallback=False).generate_all(
+            data["endpoints"], output_dir=str(out_dir),
+        )
+        src = (out_dir / "dynamic_api.py").read_text(encoding="utf-8")
+        assert src.count('@app.get("/dup")') == 1
+
+    def test_build_route_enables_smart_routing_for_lowercase(self):
+        responses = [
+            {"status": 200, "body": '{"r": "a"}', "request": {"body": '{"role": "a"}'}},
+            {"status": 200, "body": '{"r": "b"}', "request": {"body": '{"role": "b"}'}},
+        ]
+        route = build_route(
+            "post", "/api/x", responses, "post_api_x", use_smart_fallback=True,
+        )
+        assert "body.get(" in route
+        assert route.startswith('@app.post("/api/x")')
+
+    def test_build_route_keeps_query_routing_for_lowercase_get(self):
+        responses = [
+            {"status": 200, "body": '{"r": 1}', "request": {"query_params": {"mode": "a"}}},
+            {"status": 200, "body": '{"r": 2}', "request": {"query_params": {"mode": "b"}}},
+        ]
+        route = build_route(
+            "get", "/api/q", responses, "get_api_q",
+            use_smart_fallback=True, sample_request={"query_params": {"mode": "a"}},
+        )
+        assert "mode: str" in route
+        assert 'if mode == "a"' in route
+
+
 class TestQueryRouteGeneration:
     """Query-param routes must survive hostile param names and values."""
 
