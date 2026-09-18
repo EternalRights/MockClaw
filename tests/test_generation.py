@@ -666,27 +666,32 @@ class TestQueryRouteGeneration:
         compile(route, "<route>", "exec")
 
 
-def _serve(route: str, method: str, path: str, **kwargs):
-    """Exec a generated route into a throwaway app and issue one request.
+def _exec_route(route: str):
+    """Exec a generated route into a throwaway FastAPI app.
 
-    Compiling a route only proves it parses; booting it and reading the real
-    response is what catches undefined names and invented constants.
+    Compiling a route only proves it parses; importing it and reading the
+    function back is what catches undefined names and invented constants.
     """
     from fastapi import FastAPI, HTTPException, Request, Response, status
-    from fastapi.testclient import TestClient
 
     app = FastAPI()
-    exec(
-        compile(route, "<route>", "exec"),
-        {
-            "app": app,
-            "HTTPException": HTTPException,
-            "Request": Request,
-            "Response": Response,
-            "status": status,
-            "Any": Any,
-        },
-    )
+    namespace: dict[str, Any] = {
+        "app": app,
+        "HTTPException": HTTPException,
+        "Request": Request,
+        "Response": Response,
+        "status": status,
+        "Any": Any,
+    }
+    exec(compile(route, "<route>", "exec"), namespace)
+    return app, namespace
+
+
+def _serve(route: str, method: str, path: str, **kwargs):
+    """Exec a generated route and issue one request through TestClient."""
+    from fastapi.testclient import TestClient
+
+    app, _ = _exec_route(route)
     with TestClient(app, raise_server_exceptions=False) as client:
         return client.request(method, path, **kwargs)
 
@@ -791,6 +796,56 @@ class TestGeneratedRouteRuntime:
         denied = _serve(route, "POST", "/api/perm", json={"role": "guest"})
         assert denied.status_code == 403, denied.text
         assert denied.json() == {"detail": {"err": "nope"}}
+
+
+class TestScenarioListingEscaping:
+    """Raw bodies in the scenario listing must not break the generated file."""
+
+    _TRIPLE_QUOTE_BODY = '{"note": """raw triple quote""" }'
+
+    def _multi_response_route(self, body):
+        responses = [
+            {"status": 200, "body": body},
+            {"status": 200, "body": '{"other": 1}'},
+        ]
+        return build_route("GET", "/api/quoted", responses, "get_api_quoted")
+
+    def test_triple_quote_body_still_compiles(self):
+        # An unescaped """ terminated the docstring early, so the whole
+        # generated module raised SyntaxError and the mock never started.
+        route = self._multi_response_route(self._TRIPLE_QUOTE_BODY)
+        compile(route, "<route>", "exec")
+
+    def test_triple_quote_body_route_boots(self):
+        route = self._multi_response_route(self._TRIPLE_QUOTE_BODY)
+        resp = _serve(route, "GET", "/api/quoted")
+        assert resp.status_code == 200, resp.text
+
+    def test_query_route_listing_is_escaped(self):
+        responses = [
+            {"status": 200, "body": self._TRIPLE_QUOTE_BODY,
+             "request": {"query_params": {"q": "1"}}},
+            {"status": 200, "body": '{"other": 1}',
+             "request": {"query_params": {"q": "2"}}},
+        ]
+        route = build_route(
+            "GET", "/api/quoted", responses, "get_api_quoted",
+            use_smart_fallback=True, sample_request={"query_params": {"q": "1"}},
+        )
+        compile(route, "<route>", "exec")
+        assert '"""raw triple quote"""' not in route
+
+    def test_listing_still_shows_the_raw_body(self):
+        # Escaping must not corrupt what the listing *displays*.
+        route = self._multi_response_route(self._TRIPLE_QUOTE_BODY)
+        _, namespace = _exec_route(route)
+        assert self._TRIPLE_QUOTE_BODY in namespace["get_api_quoted"].__doc__
+
+    def test_backslash_body_is_displayed_verbatim(self):
+        body = '{"path": "C:\\\\Users\\\\x"}'
+        route = self._multi_response_route(body)
+        _, namespace = _exec_route(route)
+        assert body in namespace["get_api_quoted"].__doc__
 
 
 class TestLLMCodeValidation:

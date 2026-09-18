@@ -9,7 +9,6 @@ import json
 import logging
 import re
 from typing import Any
-from urllib.parse import urlparse, parse_qs
 
 _STATUS_EXC = {
     400: "HTTP_400_BAD_REQUEST",
@@ -92,14 +91,19 @@ def body_literal(body_text: str) -> str:
         return json.dumps(body_text)
 
 
-def _extract_query_params(url: str) -> dict[str, str]:
-    parsed = urlparse(url)
-    if not parsed.query:
-        return {}
-    params: dict[str, str] = {}
-    for key, values in parse_qs(parsed.query).items():
-        params[key] = values[0]
-    return params
+def _docstring_safe(text: str) -> str:
+    """Escape raw HAR body text before it goes into a triple-quoted docstring.
+
+    Scenario listings embed raw response bodies. A body containing ``\"\"\"``
+    terminates the docstring early, and a backslash can escape the closing
+    quotes; either way the generated module raises ``SyntaxError`` and the
+    whole mock server refuses to start, not just that one endpoint.
+
+    Backslashes are escaped first so the text still *reads* as the raw body:
+    a JSON body's ``\\"\\"\\"`` is displayed as ``\\"\\"\\"``, exactly as
+    captured, instead of collapsing into triple quotes.
+    """
+    return text.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
 
 
 def _latency_line(latency_ms: int, indent: str = _FB) -> str:
@@ -174,7 +178,7 @@ def build_route(
         ]
         for i, resp in enumerate(all_responses, start=1):
             sc = resp.get("status", 200)
-            preview = (resp.get("body") or "")[:60]
+            preview = _docstring_safe((resp.get("body") or "")[:60])
             lines.append(f'{_FB}  [{i}] status {sc}: {preview}')
         lines.append(f'{_FB}"""')
         if latency:
@@ -459,7 +463,7 @@ def _generate_query_route(
         lines.append(f'{_FB}"""Mock endpoint with query parameter support.')
         for i, resp in enumerate(all_responses, start=1):
             sc = resp.get("status", 200)
-            preview = (resp.get("body") or "")[:60]
+            preview = _docstring_safe((resp.get("body") or "")[:60])
             lines.append(f'{_FB}  [{i}] status {sc}: {preview}')
         lines.append(f'{_FB}"""')
     else:
