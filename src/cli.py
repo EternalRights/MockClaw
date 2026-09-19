@@ -635,21 +635,42 @@ def stats(
     content = mock_path.read_text(encoding="utf-8")
     _BUILTIN = {"health", "mockclaw/info"}
 
-    decorator_pat = re.compile(r'@app\.(\w+)\("([^"]+)"\)')
-    error_pat = re.compile(r"raise HTTPException\(status_code=status\.(\w+)")
+    # The generator emits a shorthand decorator per standard verb and falls
+    # back to api_route for the rest. Recognising only the shorthand made
+    # WebDAV endpoints (PROPFIND and friends) vanish from the report.
+    shorthand_pat = re.compile(r'@app\.(?P<method>\w+)\("(?P<path>[^"]+)"\)')
+    api_route_pat = re.compile(
+        r'@app\.api_route\("(?P<path>[^"]+)",\s*methods=\[["\']?(?P<method>\w+)'
+    )
+    # Statuses are emitted either as a raise carrying a status constant or as
+    # a JSONResponse carrying a plain integer. Reading only one form reports
+    # the other as a default 200, which is how 201/204/207 went missing.
+    raise_pat = re.compile(r"raise HTTPException\(status_code=(?:status\.)?(\w+)")
+    json_status_pat = re.compile(r"JSONResponse\(status_code=(\d+)")
     latency_pat = re.compile(r"await asyncio\.sleep\(([\d.]+)\)")
+
+    def _status_label(raw: str) -> str:
+        """Reduce an emitted status to its numeric label.
+
+        ``status.HTTP_404_NOT_FOUND`` and a plain ``404`` should not appear
+        as two different entries in the same report.
+        """
+        digits = re.match(r"(?:HTTP_)?(\d{3})", raw)
+        return digits.group(1) if digits else raw
 
     # Phase 1: discover endpoints and record where each one starts.
     # Splitting on decorator positions instead of a fixed character window
     # matters: endpoints with several recorded scenarios carry a long
     # docstring, and the latency/status lines sit past any fixed offset.
     matches = []
-    for m in decorator_pat.finditer(content):
-        method = m.group(1).upper()
-        path = m.group(2)
-        if path.strip("/") in _BUILTIN:
-            continue
-        matches.append((method, path, m.start()))
+    for pat in (shorthand_pat, api_route_pat):
+        for m in pat.finditer(content):
+            method = m.group("method").upper()
+            path = m.group("path")
+            if path.strip("/") in _BUILTIN:
+                continue
+            matches.append((method, path, m.start()))
+    matches.sort(key=lambda item: item[2])
 
     endpoints = [
         {"method": method, "path": path, "_pos": pos}
@@ -668,10 +689,12 @@ def stats(
 
         ep["smart"] = "request: Request" in block
 
-        statuses = [m.group(1) for m in error_pat.finditer(block)]
-        if not statuses:
-            statuses = ["200_OK"]
-        ep["status_codes"] = statuses
+        found = list(raise_pat.finditer(block)) + list(json_status_pat.finditer(block))
+        statuses = [
+            _status_label(m.group(1))
+            for m in sorted(found, key=lambda m: m.start())
+        ]
+        ep["status_codes"] = statuses or ["200"]
 
         latency_matches = latency_pat.findall(block)
         if latency_matches:

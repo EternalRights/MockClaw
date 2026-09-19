@@ -120,6 +120,97 @@ class TestStatsCommand:
         result = runner.invoke(app, ["stats", "./nonexistent_dir_xyz"])
         assert result.exit_code != 0
 
+    # --- status codes -------------------------------------------------
+
+    def test_stats_reports_json_response_status(self, tmp_path):
+        # Non-200 successes are emitted as JSONResponse(status_code=...), and
+        # scanning only for raises reported them as a default 200.
+        (tmp_path / "dynamic_api.py").write_text(
+            '@app.post("/api/made")\n'
+            'async def post_api_made():\n'
+            '    return JSONResponse(status_code=201, content={"id": 7})\n',
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["stats", str(tmp_path), "--json"])
+        data = json.loads(result.stdout)
+        assert data["endpoints"]["POST /api/made"]["status_codes"] == ["201"]
+
+    def test_stats_reports_raise_status(self, tmp_path):
+        (tmp_path / "dynamic_api.py").write_text(
+            '@app.get("/api/gone")\n'
+            'async def get_api_gone():\n'
+            '    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"e": 1})\n',
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["stats", str(tmp_path), "--json"])
+        data = json.loads(result.stdout)
+        assert data["endpoints"]["GET /api/gone"]["status_codes"] == ["404"]
+
+    def test_stats_defaults_to_200_for_a_plain_return(self, tmp_path):
+        (tmp_path / "dynamic_api.py").write_text(
+            '@app.get("/api/ok")\n'
+            'async def get_api_ok():\n'
+            '    return {"ok": True}\n',
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["stats", str(tmp_path), "--json"])
+        data = json.loads(result.stdout)
+        assert data["endpoints"]["GET /api/ok"]["status_codes"] == ["200"]
+
+    # --- endpoint discovery -------------------------------------------
+
+    def test_stats_discovers_api_route_endpoints(self, tmp_path):
+        # Verbs FastAPI has no shorthand for are emitted as api_route and
+        # used to be skipped entirely, undercounting total_endpoints.
+        (tmp_path / "dynamic_api.py").write_text(
+            '@app.api_route("/api/dav", methods=["PROPFIND"])\n'
+            'async def propfind_api_dav():\n'
+            '    return {"dav": True}\n',
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["stats", str(tmp_path), "--json"])
+        data = json.loads(result.stdout)
+        assert data["total_endpoints"] == 1
+        assert data["method_counts"] == {"PROPFIND": 1}
+
+    def test_stats_matches_generated_output(self, tmp_path):
+        # End-to-end: generate from a HAR, then read the report back.
+        from core.generator import MockGenerator
+        from core.parser import HARParser
+
+        def entry(method, url, status, body='{"ok": true}'):
+            return {
+                "request": {"method": method, "url": url,
+                            "headers": [], "queryString": []},
+                "response": {"status": status, "headers": [],
+                             "content": {"mimeType": "application/json",
+                                         "text": body}},
+                "time": 10,
+            }
+
+        har_path = tmp_path / "t.har"
+        har_path.write_text(json.dumps({"log": {"version": "1.2", "entries": [
+            entry("GET", "https://api.example.com/ok", 200),
+            entry("POST", "https://api.example.com/made", 201),
+            entry("GET", "https://api.example.com/gone", 404),
+            entry("PROPFIND", "https://api.example.com/dav", 207),
+        ]}}), encoding="utf-8")
+
+        out_dir = tmp_path / "out"
+        MockGenerator(use_smart_fallback=False).generate_all(
+            HARParser(str(har_path)).export_as_dict()["endpoints"],
+            output_dir=str(out_dir),
+        )
+
+        data = json.loads(
+            runner.invoke(app, ["stats", str(out_dir), "--json"]).stdout
+        )
+        assert data["total_endpoints"] == 4
+        assert data["method_counts"]["PROPFIND"] == 1
+        assert data["endpoints"]["POST /made"]["status_codes"] == ["201"]
+        assert data["endpoints"]["GET /gone"]["status_codes"] == ["404"]
+        assert data["endpoints"]["PROPFIND /dav"]["status_codes"] == ["207"]
+
     def test_stats_text_output(self, tmp_path):
         mock_file = tmp_path / "dynamic_api.py"
         mock_file.write_text(
