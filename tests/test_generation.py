@@ -589,13 +589,13 @@ class TestMethodNormalization:
     """HAR methods are not guaranteed upper-case; downstream assumes they are."""
 
     @staticmethod
-    def _entry(method, url, body='{"ok": true}', req_body=None):
+    def _entry(method, url, body='{"ok": true}', req_body=None, status=200):
         entry = {
             "request": {
                 "method": method, "url": url, "headers": [], "queryString": [],
             },
             "response": {
-                "status": 200, "headers": [],
+                "status": status, "headers": [],
                 "content": {"mimeType": "application/json", "text": body},
             },
         }
@@ -711,10 +711,7 @@ class TestNonStandardMethodRouting:
             "PROPFIND", "/api/dav", [{"status": 207, "body": '{"dav": 1}'}], "f",
         )
         resp = _serve(route, "PROPFIND", "/api/dav")
-        # The recorded 207 is not replayed verbatim yet: non-error codes other
-        # than 200 currently come back as 200. Asserting the body here keeps
-        # this test on the decorator, not on that separate gap.
-        assert resp.status_code < 400, resp.text
+        assert resp.status_code == 207, resp.text
         assert resp.json() == {"dav": 1}
 
     def test_generated_module_with_webdav_method_imports(self, tmp_path):
@@ -736,6 +733,112 @@ class TestNonStandardMethodRouting:
         src = (out_dir / "dynamic_api.py").read_text(encoding="utf-8")
         assert 'methods=["PROPFIND"]' in src
         compile(src, "dynamic_api.py", "exec")
+
+
+class TestRecordedStatusReplay:
+    """Every recorded success status must reach the client, not just 200."""
+
+    @pytest.mark.parametrize(
+        "status_code", [201, 202, 204, 206, 207, 301, 302, 304],
+    )
+    def test_single_response_replays_status(self, status_code):
+        # Returning the bare literal answered 200 for all of these, so a mock
+        # of a create or redirect endpoint misreported every response.
+        route = build_route(
+            "GET", "/api/x", [{"status": status_code, "body": '{"a": 1}'}], "f",
+        )
+        resp = _serve(route, "GET", "/api/x")
+        assert resp.status_code == status_code, resp.text
+
+    def test_plain_200_stays_a_direct_return(self):
+        route = build_route(
+            "GET", "/api/x", [{"status": 200, "body": '{"a": 1}'}], "f",
+        )
+        assert "JSONResponse" not in route
+        assert "return {" in route
+
+    def test_non_200_is_emitted_via_json_response(self):
+        route = build_route(
+            "POST", "/api/new", [{"status": 201, "body": '{"id": 7}'}], "f",
+        )
+        assert 'JSONResponse(status_code=201, content={"id": 7})' in route
+
+    @pytest.mark.parametrize("status_code", [201, 204, 302])
+    def test_multi_response_default_replays_status(self, status_code):
+        route = build_route(
+            "GET", "/api/y",
+            [{"status": status_code, "body": '{"a": 1}'},
+             {"status": 500, "body": '{"e": 1}'}],
+            "f",
+        )
+        resp = _serve(route, "GET", "/api/y")
+        assert resp.status_code == status_code, resp.text
+
+    def test_smart_route_branch_replays_status(self):
+        responses = [
+            {"status": 201, "body": '{"created": true}',
+             "request": {"body": '{"role": "a"}'}},
+            {"status": 200, "body": '{"ok": true}',
+             "request": {"body": '{"role": "b"}'}},
+        ]
+        route = build_route(
+            "POST", "/api/z", responses, "f", use_smart_fallback=True,
+        )
+        resp = _serve(route, "POST", "/api/z", json={"role": "a"})
+        assert resp.status_code == 201, resp.text
+        assert resp.json() == {"created": True}
+
+    def test_query_route_branch_replays_status(self):
+        responses = [
+            {"status": 202, "body": '{"r": 1}',
+             "request": {"query_params": {"m": "a"}}},
+            {"status": 200, "body": '{"r": 2}',
+             "request": {"query_params": {"m": "b"}}},
+        ]
+        route = build_route(
+            "GET", "/api/q", responses, "f",
+            use_smart_fallback=True, sample_request={"query_params": {"m": "a"}},
+        )
+        resp = _serve(route, "GET", "/api/q", params={"m": "a"})
+        assert resp.status_code == 202, resp.text
+
+    @pytest.mark.parametrize("status_code", [400, 404, 418, 500, 503])
+    def test_error_statuses_still_raise(self, status_code):
+        route = build_route(
+            "GET", "/api/err", [{"status": status_code, "body": '{"e": 1}'}], "f",
+        )
+        assert "raise HTTPException" in route
+        resp = _serve(route, "GET", "/api/err")
+        assert resp.status_code == status_code, resp.text
+
+    def test_generated_module_replays_status_end_to_end(self, tmp_path):
+        entries = [
+            TestMethodNormalization._entry(
+                "GET", "https://api.example.com/made", status=201,
+                body='{"id": 7}',
+            ),
+        ]
+        har = {"log": {"version": "1.2", "entries": entries}}
+        f = tmp_path / "test.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+        data = HARParser(str(f)).export_as_dict()
+
+        out_dir = tmp_path / "out"
+        MockGenerator(use_smart_fallback=False).generate_all(
+            data["endpoints"], output_dir=str(out_dir),
+        )
+        src = (out_dir / "dynamic_api.py").read_text(encoding="utf-8")
+        assert "status_code=201" in src
+
+        # The generated module is standalone: exec it as-is and drive the app.
+        from fastapi.testclient import TestClient
+
+        namespace: dict[str, Any] = {}
+        exec(compile(src, "dynamic_api.py", "exec"), namespace)
+        with TestClient(namespace["app"]) as client:
+            resp = client.get("/made")
+            assert resp.status_code == 201, resp.text
+            assert resp.json() == {"id": 7}
 
 
 class TestQueryRouteGeneration:
@@ -824,8 +927,11 @@ def _exec_route(route: str):
 
     Compiling a route only proves it parses; importing it and reading the
     function back is what catches undefined names and invented constants.
+    The namespace mirrors the header the generator writes into the mock
+    module, so a route that leans on JSONResponse is exercised the same way.
     """
     from fastapi import FastAPI, HTTPException, Request, Response, status
+    from fastapi.responses import JSONResponse
 
     app = FastAPI()
     namespace: dict[str, Any] = {
@@ -833,6 +939,7 @@ def _exec_route(route: str):
         "HTTPException": HTTPException,
         "Request": Request,
         "Response": Response,
+        "JSONResponse": JSONResponse,
         "status": status,
         "Any": Any,
     }

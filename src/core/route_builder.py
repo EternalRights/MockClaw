@@ -53,6 +53,19 @@ def _status_ref(code: int) -> str:
     return f"status.{name}" if name else str(code)
 
 
+def _return_line(status: int, body_expr: str, indent: str = _FB) -> str:
+    """Build the statement that replays one recorded success response.
+
+    Returning the bare literal always answered 200, so a recorded 201, 204 or
+    302 came back as 200 and the mock misreported every non-200 success. A
+    plain 200 keeps the direct return; anything else goes through
+    ``JSONResponse`` so the recorded status survives.
+    """
+    if status == 200:
+        return f"{indent}return {body_expr}"
+    return f"{indent}return JSONResponse(status_code={status}, content={body_expr})"
+
+
 def _py_literal(value: Any) -> str:
     """Render a JSON value as a runnable Python literal.
 
@@ -191,7 +204,7 @@ def build_route(
             f"{_FB}raise HTTPException(status_code={_status_ref(sc0)},detail={body0})"
         )
     else:
-        body_code = f"{_FB}return {body0}"
+        body_code = _return_line(sc0, body0)
 
     if len(all_responses) > 1:
         lines = [
@@ -368,7 +381,7 @@ def _generate_smart_route(
             lines.append(f'{_FB}    raise HTTPException(status_code={_status_ref(status)}, detail={resp_literal})')
         else:
             resp_literal = body_literal(json.dumps(resp_data))
-            lines.append(f'{_FB}    return {resp_literal}')
+            lines.append(_return_line(status, resp_literal, _FB * 2))
 
     default_response = next(
         (resp for resp in all_responses if 200 <= resp.get("status", 200) < 300),
@@ -380,7 +393,7 @@ def _generate_smart_route(
     if 400 <= default_status < 600:
         lines.append(f'{_FB}    raise HTTPException(status_code={_status_ref(default_status)}, detail={body_literal(default_resp)})')
     else:
-        lines.append(f'{_FB}    return {body_literal(default_resp)}')
+        lines.append(_return_line(default_status, body_literal(default_resp), _FB * 2))
 
     return "\n".join(lines) + "\n"
 
@@ -519,7 +532,7 @@ def _generate_query_route(
             if 400 <= status_ < 600:
                 lines.append(f'{_FB}    raise HTTPException(status_code={_status_ref(status_)}, detail={resp_literal})')
             else:
-                lines.append(f'{_FB}    return {resp_literal}')
+                lines.append(_return_line(status_, resp_literal, _FB * 2))
 
         default_response = next(
             (resp for resp in all_responses if 200 <= resp.get("status", 200) < 300),
@@ -531,14 +544,14 @@ def _generate_query_route(
         if 400 <= default_status < 600:
             lines.append(f'{_FB}    raise HTTPException(status_code={_status_ref(default_status)}, detail={default_literal})')
         else:
-            lines.append(f'{_FB}    return {default_literal}')
+            lines.append(_return_line(default_status, default_literal, _FB * 2))
     else:
         sc0 = all_responses[0].get("status", 200)
         body0 = body_literal(all_responses[0].get("body") or "{}")
         if 400 <= sc0 < 600:
             lines.append(f'{_FB}raise HTTPException(status_code={_status_ref(sc0)}, detail={body0})')
         else:
-            lines.append(f'{_FB}return {body0}')
+            lines.append(_return_line(sc0, body0))
 
     return "\n".join(lines) + "\n"
 
