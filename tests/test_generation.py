@@ -803,13 +803,52 @@ class TestRecordedStatusReplay:
         assert resp.status_code == 202, resp.text
 
     @pytest.mark.parametrize("status_code", [400, 404, 418, 500, 503])
-    def test_error_statuses_still_raise(self, status_code):
+    def test_error_statuses_are_replayed(self, status_code):
         route = build_route(
             "GET", "/api/err", [{"status": status_code, "body": '{"e": 1}'}], "f",
         )
-        assert "raise HTTPException" in route
+        assert f"JSONResponse(status_code={status_code}" in route
         resp = _serve(route, "GET", "/api/err")
         assert resp.status_code == status_code, resp.text
+        # The recorded body must come back as captured, not wrapped in detail.
+        assert resp.json() == {"e": 1}
+
+    def test_smart_route_error_body_is_replayed_verbatim(self):
+        responses = [
+            {"status": 403, "body": '{"err": "nope"}',
+             "request": {"body": '{"role": "guest"}'}},
+            {"status": 200, "body": '{"ok": true}',
+             "request": {"body": '{"role": "admin"}'}},
+        ]
+        route = build_route(
+            "POST", "/api/p", responses, "f", use_smart_fallback=True,
+        )
+        resp = _serve(route, "POST", "/api/p", json={"role": "guest"})
+        assert resp.status_code == 403, resp.text
+        assert resp.json() == {"err": "nope"}
+
+    def test_query_route_error_body_is_replayed_verbatim(self):
+        responses = [
+            {"status": 418, "body": '{"e": "teapot"}',
+             "request": {"query_params": {"m": "a"}}},
+            {"status": 200, "body": '{"ok": true}',
+             "request": {"query_params": {"m": "b"}}},
+        ]
+        route = build_route(
+            "GET", "/api/q", responses, "f",
+            use_smart_fallback=True, sample_request={"query_params": {"m": "a"}},
+        )
+        resp = _serve(route, "GET", "/api/q", params={"m": "a"})
+        assert resp.status_code == 418, resp.text
+        assert resp.json() == {"e": "teapot"}
+
+    def test_text_error_body_is_replayed_verbatim(self):
+        route = build_route(
+            "GET", "/api/t", [{"status": 500, "body": "internal boom"}], "f",
+        )
+        resp = _serve(route, "GET", "/api/t")
+        assert resp.status_code == 500, resp.text
+        assert resp.json() == "internal boom"
 
     def test_generated_module_replays_status_end_to_end(self, tmp_path):
         entries = [
@@ -906,8 +945,9 @@ class TestQueryRouteGeneration:
         compile(route, "<route>", "exec")
 
     def test_reserved_import_name_is_suffixed(self):
-        # A query param named "status" would shadow FastAPI's status module
-        # and break the raise branch; it must be emitted as status_ instead.
+        # A query param named "status" would shadow the module-level status
+        # import; it must be emitted as status_ instead, and the branch on it
+        # has to keep working.
         responses = [
             {"status": 200, "body": '{"ok": true}', "request": {"query_params": {"status": "ok"}}},
             {"status": 500, "body": '{"err": 1}', "request": {"query_params": {"status": "bad"}}},
@@ -918,7 +958,7 @@ class TestQueryRouteGeneration:
             use_smart_fallback=True, sample_request=request,
         )
         assert "status_: str" in route
-        assert "status.HTTP_500" in route
+        assert "status_code=500" in route
         compile(route, "<route>", "exec")
 
 
@@ -957,7 +997,7 @@ def _serve(route: str, method: str, path: str, **kwargs):
 
 
 class TestStatusCodeRendering:
-    """A recorded status must survive into the generated raise statement."""
+    """A recorded status must survive into the generated response, unchanged."""
 
     def test_unmapped_status_is_not_silently_remapped(self):
         # 418 used to fall through to HTTP_500_INTERNAL_SERVER_ERROR, so the
@@ -983,12 +1023,15 @@ class TestStatusCodeRendering:
         assert "HTTP_418_ERROR" not in route
         assert "status_code=418" in route
 
-    def test_mapped_status_keeps_named_constant(self):
+    def test_status_is_emitted_as_a_plain_integer(self):
+        # Statuses are no longer spelled as status.HTTP_* constants: a plain
+        # integer works for every code, including ones with no named constant.
         route = build_route(
             "GET", "/api/thing", [{"status": 404, "body": '{"e": 1}'}],
             "get_api_thing",
         )
-        assert "status_code=status.HTTP_404_NOT_FOUND" in route
+        assert "status_code=404" in route
+        assert "HTTP_404" not in route
 
     def test_smart_route_unmapped_status_uses_int_literal(self):
         responses = [
@@ -1055,7 +1098,7 @@ class TestGeneratedRouteRuntime:
         assert allowed.status_code == 200, allowed.text
         denied = _serve(route, "POST", "/api/perm", json={"role": "guest"})
         assert denied.status_code == 403, denied.text
-        assert denied.json() == {"detail": {"err": "nope"}}
+        assert denied.json() == {"err": "nope"}
 
 
 class TestScenarioListingEscaping:

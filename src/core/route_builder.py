@@ -10,56 +10,20 @@ import logging
 import re
 from typing import Any
 
-_STATUS_EXC = {
-    400: "HTTP_400_BAD_REQUEST",
-    401: "HTTP_401_UNAUTHORIZED",
-    402: "HTTP_402_PAYMENT_REQUIRED",
-    403: "HTTP_403_FORBIDDEN",
-    404: "HTTP_404_NOT_FOUND",
-    405: "HTTP_405_METHOD_NOT_ALLOWED",
-    406: "HTTP_406_NOT_ACCEPTABLE",
-    408: "HTTP_408_REQUEST_TIMEOUT",
-    409: "HTTP_409_CONFLICT",
-    410: "HTTP_410_GONE",
-    411: "HTTP_411_LENGTH_REQUIRED",
-    412: "HTTP_412_PRECONDITION_FAILED",
-    413: "HTTP_413_REQUEST_ENTITY_TOO_LARGE",
-    415: "HTTP_415_UNSUPPORTED_MEDIA_TYPE",
-    422: "HTTP_422_UNPROCESSABLE_ENTITY",
-    429: "HTTP_429_TOO_MANY_REQUESTS",
-    500: "HTTP_500_INTERNAL_SERVER_ERROR",
-    501: "HTTP_501_NOT_IMPLEMENTED",
-    502: "HTTP_502_BAD_GATEWAY",
-    503: "HTTP_503_SERVICE_UNAVAILABLE",
-    504: "HTTP_504_GATEWAY_TIMEOUT",
-}
-
 _FB = "    "
 
 _logger = logging.getLogger(__name__)
 
 
-def _status_ref(code: int) -> str:
-    """Render a status code as an expression usable inside generated code.
-
-    Prefers ``fastapi.status.HTTP_*`` when the constant is known, otherwise
-    falls back to the plain integer. Two wrong turns are avoided here: naming
-    an unmapped code ``status.HTTP_418_ERROR`` invents an attribute that does
-    not exist (``AttributeError`` at runtime), and substituting a default
-    constant like ``HTTP_500_INTERNAL_SERVER_ERROR`` for an unmapped code
-    silently changes the mock's response status.
-    """
-    name = _STATUS_EXC.get(code)
-    return f"status.{name}" if name else str(code)
-
-
 def _return_line(status: int, body_expr: str, indent: str = _FB) -> str:
-    """Build the statement that replays one recorded success response.
+    """Build the statement that replays one recorded response.
 
-    Returning the bare literal always answered 200, so a recorded 201, 204 or
-    302 came back as 200 and the mock misreported every non-200 success. A
-    plain 200 keeps the direct return; anything else goes through
-    ``JSONResponse`` so the recorded status survives.
+    Every recorded status and body is replayed through one path so the mock
+    answers exactly what the HAR captured. Returning the bare literal always
+    answered 200, misreporting a recorded 201, 204 or 302; raising
+    HTTPException did set the status but wrapped the body in ``{"detail":
+    ...}``. A plain 200 keeps the direct return; anything else goes out via
+    ``JSONResponse`` with the recorded status code and the recorded body.
     """
     if status == 200:
         return f"{indent}return {body_expr}"
@@ -199,12 +163,7 @@ def build_route(
     sc0 = all_responses[0].get("status", 200)
     body0 = body_literal(all_responses[0].get("body") or "")
 
-    if 400 <= sc0 < 600:
-        body_code = (
-            f"{_FB}raise HTTPException(status_code={_status_ref(sc0)},detail={body0})"
-        )
-    else:
-        body_code = _return_line(sc0, body0)
+    body_code = _return_line(sc0, body0)
 
     if len(all_responses) > 1:
         lines = [
@@ -376,12 +335,8 @@ def _generate_smart_route(
         first = False
         lines.append(f"{_FB}{keyword} {condition}:")
 
-        if 400 <= status < 600:
-            resp_literal = body_literal(json.dumps(resp_data))
-            lines.append(f'{_FB}    raise HTTPException(status_code={_status_ref(status)}, detail={resp_literal})')
-        else:
-            resp_literal = body_literal(json.dumps(resp_data))
-            lines.append(_return_line(status, resp_literal, _FB * 2))
+        resp_literal = body_literal(json.dumps(resp_data))
+        lines.append(_return_line(status, resp_literal, _FB * 2))
 
     default_response = next(
         (resp for resp in all_responses if 200 <= resp.get("status", 200) < 300),
@@ -390,10 +345,7 @@ def _generate_smart_route(
     default_resp = default_response.get("body", "{}")
     default_status = default_response.get("status", 200)
     lines.append(f'{_FB}else:')
-    if 400 <= default_status < 600:
-        lines.append(f'{_FB}    raise HTTPException(status_code={_status_ref(default_status)}, detail={body_literal(default_resp)})')
-    else:
-        lines.append(_return_line(default_status, body_literal(default_resp), _FB * 2))
+    lines.append(_return_line(default_status, body_literal(default_resp), _FB * 2))
 
     return "\n".join(lines) + "\n"
 
@@ -529,10 +481,7 @@ def _generate_query_route(
             lines.append(f"{_FB}{keyword} {condition}:")
 
             resp_literal = body_literal(resp_body)
-            if 400 <= status_ < 600:
-                lines.append(f'{_FB}    raise HTTPException(status_code={_status_ref(status_)}, detail={resp_literal})')
-            else:
-                lines.append(_return_line(status_, resp_literal, _FB * 2))
+            lines.append(_return_line(status_, resp_literal, _FB * 2))
 
         default_response = next(
             (resp for resp in all_responses if 200 <= resp.get("status", 200) < 300),
@@ -541,17 +490,11 @@ def _generate_query_route(
         default_status = default_response.get("status", 200)
         default_literal = body_literal(default_response.get("body") or "{}")
         lines.append(f'{_FB}else:')
-        if 400 <= default_status < 600:
-            lines.append(f'{_FB}    raise HTTPException(status_code={_status_ref(default_status)}, detail={default_literal})')
-        else:
-            lines.append(_return_line(default_status, default_literal, _FB * 2))
+        lines.append(_return_line(default_status, default_literal, _FB * 2))
     else:
         sc0 = all_responses[0].get("status", 200)
         body0 = body_literal(all_responses[0].get("body") or "{}")
-        if 400 <= sc0 < 600:
-            lines.append(f'{_FB}raise HTTPException(status_code={_status_ref(sc0)}, detail={body0})')
-        else:
-            lines.append(_return_line(sc0, body0))
+        lines.append(_return_line(sc0, body0))
 
     return "\n".join(lines) + "\n"
 
