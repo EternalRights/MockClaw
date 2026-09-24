@@ -735,6 +735,93 @@ class TestNonStandardMethodRouting:
         compile(src, "dynamic_api.py", "exec")
 
 
+class TestQueryParamAliasing:
+    """A sanitized query name must still answer to the key the HAR recorded."""
+
+    RENAMED = ["user-id", "filter[]", "class", "status", "2fa", "sort by"]
+
+    @staticmethod
+    def _route(param, default="a", other="b"):
+        responses = [
+            {"status": 200, "body": '{"r": "default"}',
+             "request": {"query_params": {param: default}}},
+            {"status": 200, "body": '{"r": "other"}',
+             "request": {"query_params": {param: other}}},
+        ]
+        return build_route(
+            "GET", "/api/s", responses, "f",
+            use_smart_fallback=True, sample_request={"query_params": {param: default}},
+        )
+
+    def test_renamed_param_is_aliased_to_the_original(self):
+        route = self._route("user-id")
+        assert 'user_id: str = Query("a", alias="user-id")' in route
+
+    def test_plain_param_gets_no_alias(self):
+        route = self._route("mode")
+        assert "mode: str" in route
+        assert "alias=" not in route
+
+    @pytest.mark.parametrize("param", RENAMED)
+    def test_renamed_param_binds_the_recorded_key(self, param):
+        # FastAPI binds on the argument name, so without an alias the
+        # sanitized name never matched and every request fell through to the
+        # default branch -- conditional routing silently never fired.
+        route = self._route(param)
+        resp = _serve(route, "GET", "/api/s", params={param: "b"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"r": "other"}
+
+    def test_default_value_is_still_used(self):
+        route = self._route("user-id")
+        resp = _serve(route, "GET", "/api/s")
+        assert resp.json() == {"r": "default"}
+
+    def test_generated_module_binds_renamed_param(self, tmp_path):
+        def entry(value, body):
+            return {
+                "request": {
+                    "method": "GET",
+                    "url": f"https://api.example.com/s?user-id={value}",
+                    "headers": [],
+                    "queryString": [{"name": "user-id", "value": value}],
+                },
+                "response": {"status": 200, "headers": [],
+                             "content": {"mimeType": "application/json",
+                                         "text": body}},
+                "time": 5,
+            }
+
+        f = tmp_path / "test.har"
+        f.write_text(json.dumps({"log": {"version": "1.2", "entries": [
+            entry("7", '{"r": "seven"}'),
+            entry("9", '{"r": "nine"}'),
+        ]}}), encoding="utf-8")
+        data = HARParser(str(f)).export_as_dict()
+
+        out_dir = tmp_path / "out"
+        MockGenerator(use_smart_fallback=True).generate_all(
+            data["endpoints"], output_dir=str(out_dir),
+        )
+        src = (out_dir / "dynamic_api.py").read_text(encoding="utf-8")
+        assert 'alias="user-id"' in src
+
+        # The generated module is standalone: exec it and drive the app.
+        from fastapi.testclient import TestClient
+
+        namespace: dict[str, Any] = {}
+        exec(compile(src, "dynamic_api.py", "exec"), namespace)
+        with TestClient(namespace["app"]) as client:
+            assert client.get("/s", params={"user-id": "9"}).json() == {"r": "nine"}
+
+    def test_param_named_query_is_suffixed(self):
+        # Query is imported by the generated module header, so a parameter
+        # using that name would shadow it.
+        route = self._route("Query")
+        assert "Query_: str" in route
+        compile(route, "<route>", "exec")
+
+
 class TestRecordedStatusReplay:
     """Every recorded success status must reach the client, not just 200."""
 
@@ -970,7 +1057,7 @@ def _exec_route(route: str):
     The namespace mirrors the header the generator writes into the mock
     module, so a route that leans on JSONResponse is exercised the same way.
     """
-    from fastapi import FastAPI, HTTPException, Request, Response, status
+    from fastapi import FastAPI, HTTPException, Query, Request, Response, status
     from fastapi.responses import JSONResponse
 
     app = FastAPI()
@@ -980,6 +1067,7 @@ def _exec_route(route: str):
         "Request": Request,
         "Response": Response,
         "JSONResponse": JSONResponse,
+        "Query": Query,
         "status": status,
         "Any": Any,
     }

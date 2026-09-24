@@ -363,7 +363,7 @@ _KEYWORDS = frozenset({
 _RESERVED_NAMES = _KEYWORDS | {
     "FastAPI", "HTTPException", "status", "Request", "Response",
     "JSONResponse", "CORSMiddleware", "BaseHTTPMiddleware", "Any",
-    "asyncio", "time", "json", "defaultdict", "app",
+    "asyncio", "time", "json", "defaultdict", "app", "Query",
 }
 
 
@@ -444,7 +444,17 @@ def _generate_query_route(
         # json.dumps handles quotes/backslashes/newlines inside the value;
         # a plain f-string interpolation would emit broken Python.
         default_literal = json.dumps(str(default_val))
-        lines.append(f"{_FB}{_safe_param_name(param)}: str = {default_literal},")
+        safe = _safe_param_name(param)
+        if safe == param:
+            lines.append(f"{_FB}{safe}: str = {default_literal},")
+        else:
+            # FastAPI binds a query parameter on the argument name, so a
+            # sanitized name would never match the key the HAR recorded:
+            # "user-id" has to stay reachable as user-id, not user_id.
+            lines.append(
+                f"{_FB}{safe}: str = Query({default_literal}, "
+                f"alias={json.dumps(param, ensure_ascii=False)}),"
+            )
     lines.append(f"):")
 
     if len(all_responses) > 1:
