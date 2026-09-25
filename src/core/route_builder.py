@@ -160,7 +160,7 @@ def build_route(
             f"{_FB}return {{}}\n"
         )
 
-    sc0 = all_responses[0].get("status", 200)
+    sc0 = all_responses[0].get("status") or 200
     body0 = body_literal(all_responses[0].get("body") or "")
 
     body_code = _return_line(sc0, body0)
@@ -172,7 +172,7 @@ def build_route(
             f'{_FB}"""Mock endpoint -- {len(all_responses)} HAR scenarios recorded.',
         ]
         for i, resp in enumerate(all_responses, start=1):
-            sc = resp.get("status", 200)
+            sc = resp.get("status") or 200
             preview = _docstring_safe((resp.get("body") or "")[:60])
             lines.append(f'{_FB}  [{i}] status {sc}: {preview}')
         lines.append(f'{_FB}"""')
@@ -277,7 +277,7 @@ def _generate_smart_route(
 
     for resp in all_responses:
         req_body = resp.get("request", {}).get("body", "")
-        resp_status = resp.get("status", 200)
+        resp_status = resp.get("status") or 200
         resp_body = resp.get("body", "")
 
         if req_body:
@@ -339,11 +339,11 @@ def _generate_smart_route(
         lines.append(_return_line(status, resp_literal, _FB * 2))
 
     default_response = next(
-        (resp for resp in all_responses if 200 <= resp.get("status", 200) < 300),
+        (resp for resp in all_responses if 200 <= (resp.get("status") or 200) < 300),
         all_responses[0]
     )
     default_resp = default_response.get("body", "{}")
-    default_status = default_response.get("status", 200)
+    default_status = default_response.get("status") or 200
     lines.append(f'{_FB}else:')
     lines.append(_return_line(default_status, body_literal(default_resp), _FB * 2))
 
@@ -414,7 +414,7 @@ def _generate_query_route(
     for resp in all_responses:
         qp = resp.get("request", {}).get("query_params", {})
         if qp:
-            distinct.append((qp, resp.get("status", 200), resp.get("body") or "{}"))
+            distinct.append((qp, resp.get("status") or 200, resp.get("body") or "{}"))
 
     distinct = _dedupe_requests(distinct)
 
@@ -460,7 +460,7 @@ def _generate_query_route(
     if len(all_responses) > 1:
         lines.append(f'{_FB}"""Mock endpoint with query parameter support.')
         for i, resp in enumerate(all_responses, start=1):
-            sc = resp.get("status", 200)
+            sc = resp.get("status") or 200
             preview = _docstring_safe((resp.get("body") or "")[:60])
             lines.append(f'{_FB}  [{i}] status {sc}: {preview}')
         lines.append(f'{_FB}"""')
@@ -494,15 +494,15 @@ def _generate_query_route(
             lines.append(_return_line(status_, resp_literal, _FB * 2))
 
         default_response = next(
-            (resp for resp in all_responses if 200 <= resp.get("status", 200) < 300),
+            (resp for resp in all_responses if 200 <= (resp.get("status") or 200) < 300),
             all_responses[0],
         )
-        default_status = default_response.get("status", 200)
+        default_status = default_response.get("status") or 200
         default_literal = body_literal(default_response.get("body") or "{}")
         lines.append(f'{_FB}else:')
         lines.append(_return_line(default_status, default_literal, _FB * 2))
     else:
-        sc0 = all_responses[0].get("status", 200)
+        sc0 = all_responses[0].get("status") or 200
         body0 = body_literal(all_responses[0].get("body") or "{}")
         lines.append(_return_line(sc0, body0))
 

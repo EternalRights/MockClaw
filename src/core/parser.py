@@ -40,6 +40,22 @@ def _normalize_method(value: object) -> str:
     return method or 'GET'
 
 
+def _to_int(value: object, default: int) -> int:
+    """Coerce a HAR value to int, tolerating null, blank and junk.
+
+    Exporters write ``null`` (or "") for fields the spec marks required.
+    ``int(None)`` raises TypeError and takes the whole file down with it, and
+    a null status silently propagates into the generated server instead of
+    falling back to 200.
+    """
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass
 class HTTPRequest:
     """Represents a parsed HTTP request."""
@@ -171,11 +187,11 @@ class HARParser:
                 break
 
         return HTTPResponse(
-            status=response.get('status', 200),
+            status=_to_int(response.get('status'), 200),
             headers=self._parse_headers(response.get('headers', [])),
             body=content.get('text'),
             content_type=content_type,
-            latency_ms=int(entry.get('time', 0)),
+            latency_ms=_to_int(entry.get('time'), 0),
         )
 
     def parse(self) -> list[APIEndpoint]:

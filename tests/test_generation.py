@@ -584,6 +584,67 @@ class TestNullFieldTolerance:
     def test_null_entries_yields_no_endpoints(self, tmp_path):
         assert self._parse({"log": {"entries": None}}, tmp_path) == []
 
+    def test_null_time_does_not_crash_the_parse(self, tmp_path):
+        # int(None) used to raise TypeError inside _parse_response, taking the
+        # whole file down rather than skipping the timing.
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET", "url": "https://api.example.com/a",
+                        "headers": [], "queryString": []},
+            "response": {"status": 200, "headers": [],
+                         "content": {"mimeType": "application/json",
+                                     "text": '{"ok": true}'}},
+            "time": None,
+        }]}}
+        endpoints = self._parse(har, tmp_path)
+        assert len(endpoints) == 1
+        assert endpoints[0].responses[0].latency_ms == 0
+
+    def test_null_status_falls_back_to_200(self, tmp_path):
+        # A null status used to reach the generated route verbatim and emit
+        # JSONResponse(status_code=None, ...).
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET", "url": "https://api.example.com/a",
+                        "headers": [], "queryString": []},
+            "response": {"status": None, "headers": [],
+                         "content": {"mimeType": "application/json",
+                                     "text": '{"ok": true}'}},
+            "time": 50,
+        }]}}
+        endpoints = self._parse(har, tmp_path)
+        assert endpoints[0].responses[0].status == 200
+
+    def test_null_status_never_reaches_generated_code(self, tmp_path):
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET", "url": "https://api.example.com/a",
+                        "headers": [], "queryString": []},
+            "response": {"status": None, "headers": [],
+                         "content": {"mimeType": "application/json",
+                                     "text": '{"ok": true}'}},
+            "time": 50,
+        }]}}
+        f = tmp_path / "test.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+        data = HARParser(str(f)).export_as_dict()
+
+        out_dir = tmp_path / "out"
+        MockGenerator(use_smart_fallback=False).generate_all(
+            data["endpoints"], output_dir=str(out_dir),
+        )
+        src = (out_dir / "dynamic_api.py").read_text(encoding="utf-8")
+        assert "status_code=None" not in src
+        assert "None" not in src.split("# === Generated Endpoints ===")[-1]
+
+    def test_null_response_and_request_still_parse(self, tmp_path):
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": None,
+            "response": None,
+            "time": None,
+        }]}}
+        endpoints = self._parse(har, tmp_path)
+        assert len(endpoints) == 1
+        assert endpoints[0].responses[0].status == 200
+        assert endpoints[0].responses[0].latency_ms == 0
+
 
 class TestMethodNormalization:
     """HAR methods are not guaranteed upper-case; downstream assumes they are."""
@@ -928,6 +989,23 @@ class TestRecordedStatusReplay:
         resp = _serve(route, "GET", "/api/q", params={"m": "a"})
         assert resp.status_code == 418, resp.text
         assert resp.json() == {"e": "teapot"}
+
+    def test_default_branch_uses_the_first_2xx_response(self):
+        # The fallback picks the first 2xx response, not simply the first one.
+        # Watch the parentheses: `200 <= x or 200 < 300` is always true, which
+        # silently turned this into "always take all_responses[0]".
+        responses = [
+            {"status": 500, "body": '{"e": "boom"}',
+             "request": {"body": '{"role": "x"}'}},
+            {"status": 200, "body": '{"ok": true}',
+             "request": {"body": '{"role": "y"}'}},
+        ]
+        route = build_route(
+            "POST", "/api/p", responses, "f", use_smart_fallback=True,
+        )
+        resp = _serve(route, "POST", "/api/p", json={"role": "zzz"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"ok": True}
 
     def test_text_error_body_is_replayed_verbatim(self):
         route = build_route(
