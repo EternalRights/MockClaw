@@ -110,6 +110,63 @@ def _route_decorator(method: str, path: str) -> str:
     return f'@app.api_route("{path}", methods=["{method}"])'
 
 
+_PATH_PARAM_RE = re.compile(r"\{([^{}:/]+)\}")
+
+
+def _path_params(path: str) -> list[str]:
+    """Extract ``{name}`` placeholders from a route path, in order.
+
+    ``/api/user/{id}/orders/{order_id}`` yields ``["id", "order_id"]``.
+    Empty braces, names containing ``/`` or ``:`` (OpenAPI style params
+    like ``{id:min=1}``) are skipped rather than emitted as broken args.
+    """
+    return [m.group(1).strip() for m in _PATH_PARAM_RE.finditer(path) if m.group(1).strip()]
+
+
+def _arg_signature(path: str, query_params: dict[str, Any] | None) -> list[str]:
+    """Build the function-argument list for a route handler.
+
+    Path placeholders come first (FastAPI binds them positionally from the
+    decorator path), then query parameters. The URL always supplies a value
+    for a path placeholder, so plain ones are declared required (``id:
+    str``) -- a made-up default would never be used and FastAPI rejects
+    ``Path("x")`` with "cannot have a default value". A placeholder that is
+    not a valid identifier (``{user-id}``) or collides with a module-level
+    name (``{status}``) is renamed via ``_safe_param_name`` and rebound to
+    the original key through ``Path(..., alias=...)``.
+
+    Query parameters keep their recorded value as the default so one
+    handler can serve *all* recorded scenarios without FastAPI rejecting a
+    request that omits a key a later branch might test.
+    """
+    args: list[str] = []
+
+    for name in _path_params(path):
+        safe = _safe_param_name(name)
+        if safe == name:
+            args.append(f"{safe}: str")
+        else:
+            args.append(f"{safe}: str = Path(..., alias={json.dumps(name)})")
+
+    if query_params:
+        for param, default_val in query_params.items():
+            safe = _safe_param_name(param)
+            # json.dumps handles quotes/backslashes/newlines inside the value;
+            # a plain f-string interpolation would emit broken Python.
+            default_literal = json.dumps(str(default_val))
+            if safe == param:
+                args.append(f"{safe}: str = {default_literal}")
+            else:
+                # FastAPI binds a query parameter on the argument name, so a
+                # sanitized name would never match the key the HAR recorded:
+                # "user-id" has to stay reachable as user-id, not user_id.
+                args.append(
+                    f"{safe}: str = Query({default_literal}, "
+                    f"alias={json.dumps(param, ensure_ascii=False)})"
+                )
+    return args
+
+
 def build_route(
     method: str,
     path: str,
@@ -141,9 +198,11 @@ def build_route(
         for resp in all_responses
     )
 
-    has_query_params = bool(
-        sample_request and sample_request.get("query_params")
+    sample_query_params = (
+        (sample_request or {}).get("query_params") or {}
     )
+
+    has_query_params = bool(sample_query_params)
 
     if use_smart_fallback and method in ["POST", "PUT", "PATCH", "DELETE"] and has_request_body:
         return _generate_smart_route(method, path, all_responses, func_name, latency_ms)
@@ -152,9 +211,10 @@ def build_route(
         return _generate_query_route(method, path, all_responses, func_name, sample_request, latency_ms)
 
     if not all_responses:
+        sig = ", ".join(_arg_signature(path, sample_query_params))
         return (
             _route_decorator(method, path) + "\n"
-            f"async def {func_name}():\n"
+            f"async def {func_name}({sig}):\n"
             f'{_FB}"""Mock endpoint -- no HAR response data."""\n'
             f"{latency}"
             f"{_FB}return {{}}\n"
@@ -165,10 +225,15 @@ def build_route(
 
     body_code = _return_line(sc0, body0)
 
+    # Path placeholders and recorded query keys become typed handler
+    # arguments. Without them the OpenAPI schema advertises a bare endpoint
+    # and clients cannot discover that /api/user/{id} takes an id.
+    sig = ", ".join(_arg_signature(path, sample_query_params))
+
     if len(all_responses) > 1:
         lines = [
             _route_decorator(method, path),
-            f"async def {func_name}():",
+            f"async def {func_name}({sig}):",
             f'{_FB}"""Mock endpoint -- {len(all_responses)} HAR scenarios recorded.',
         ]
         for i, resp in enumerate(all_responses, start=1):
@@ -183,7 +248,7 @@ def build_route(
 
     return (
         _route_decorator(method, path) + "\n"
-        f"async def {func_name}():\n"
+        f"async def {func_name}({sig}):\n"
         f'{_FB}"""Mock endpoint -- HAR status {sc0}."""\n'
         f"{latency}"
         f"{body_code}\n"
@@ -305,9 +370,16 @@ def _generate_smart_route(
     if not fields:
         return build_route(method, path, all_responses, func_name, use_smart_fallback=False, latency_ms=latency_ms)
 
+    # Path placeholders must be declared even on body-routing handlers,
+    # or FastAPI rejects requests with "no path params were defined".
+    # ``request`` and the path args are all default-less, which keeps the
+    # signature valid Python ahead of the defaulted query args.
+    sig = ", ".join(_arg_signature(path, None))
+
     lines = [
         _route_decorator(method, path),
-        f"async def {func_name}(request: Request):",
+        f"async def {func_name}(request: Request, {sig}):" if sig
+        else f"async def {func_name}(request: Request):",
         f'{_FB}"""Smart mock endpoint with conditional routing."""',
     ]
     if latency:
@@ -363,7 +435,7 @@ _KEYWORDS = frozenset({
 _RESERVED_NAMES = _KEYWORDS | {
     "FastAPI", "HTTPException", "status", "Request", "Response",
     "JSONResponse", "CORSMiddleware", "BaseHTTPMiddleware", "Any",
-    "asyncio", "time", "json", "defaultdict", "app", "Query",
+    "asyncio", "time", "json", "defaultdict", "app", "Query", "Path",
 }
 
 
@@ -429,33 +501,16 @@ def _generate_query_route(
     # Declare the sampled params plus any key a branch might test. A later
     # response can carry query keys the sampled request did not, and a branch
     # referencing an undeclared name would NameError in the generated server.
-    param_names = list(query_params.keys())
+    declared = dict(query_params)
     for field in all_fields:
-        if field not in param_names:
-            param_names.append(field)
+        declared.setdefault(field, "")
+
+    sig = ", ".join(_arg_signature(path, declared))
 
     lines = [
         _route_decorator(method, path),
-        f"async def {func_name}(",
+        f"async def {func_name}({sig}):",
     ]
-
-    for param in param_names:
-        default_val = query_params.get(param, "")
-        # json.dumps handles quotes/backslashes/newlines inside the value;
-        # a plain f-string interpolation would emit broken Python.
-        default_literal = json.dumps(str(default_val))
-        safe = _safe_param_name(param)
-        if safe == param:
-            lines.append(f"{_FB}{safe}: str = {default_literal},")
-        else:
-            # FastAPI binds a query parameter on the argument name, so a
-            # sanitized name would never match the key the HAR recorded:
-            # "user-id" has to stay reachable as user-id, not user_id.
-            lines.append(
-                f"{_FB}{safe}: str = Query({default_literal}, "
-                f"alias={json.dumps(param, ensure_ascii=False)}),"
-            )
-    lines.append(f"):")
 
     if len(all_responses) > 1:
         lines.append(f'{_FB}"""Mock endpoint with query parameter support.')

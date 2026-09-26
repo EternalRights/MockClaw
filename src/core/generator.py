@@ -31,7 +31,7 @@ _MOCK_SERVER_HEADER_TPL = """\
 # MockClaw Auto-Generated Mock Server
 # Do not edit manually -- regenerate from HAR traffic.
 
-from fastapi import FastAPI, HTTPException, status, Request, Response, Query
+from fastapi import FastAPI, HTTPException, status, Request, Response, Query, Path
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Any

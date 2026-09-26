@@ -1135,7 +1135,7 @@ def _exec_route(route: str):
     The namespace mirrors the header the generator writes into the mock
     module, so a route that leans on JSONResponse is exercised the same way.
     """
-    from fastapi import FastAPI, HTTPException, Query, Request, Response, status
+    from fastapi import FastAPI, HTTPException, Path, Query, Request, Response, status
     from fastapi.responses import JSONResponse
 
     app = FastAPI()
@@ -1146,6 +1146,7 @@ def _exec_route(route: str):
         "Response": Response,
         "JSONResponse": JSONResponse,
         "Query": Query,
+        "Path": Path,
         "status": status,
         "Any": Any,
     }
@@ -1265,6 +1266,136 @@ class TestGeneratedRouteRuntime:
         denied = _serve(route, "POST", "/api/perm", json={"role": "guest"})
         assert denied.status_code == 403, denied.text
         assert denied.json() == {"err": "nope"}
+
+
+class TestPathAndQueryDeclaration:
+    """Path placeholders and recorded query keys must become typed handler args.
+
+    Without declaration the OpenAPI schema advertises a bare endpoint:
+    /docs shows no parameters and generated clients drop them entirely.
+    Path params also must not carry a fake default -- FastAPI asserts
+    ``Path`` params have none, and the URL always supplies the value.
+    """
+
+    def test_default_mode_declares_path_and_query_params(self):
+        # The signature used to be empty: /api/user/{id} plus ?active=true
+        # rendered as `async def get_api_user_id():`.
+        responses = [
+            {"status": 200, "body": '{"id": 1}',
+             "request": {"query_params": {"active": "true"}}},
+        ]
+        route = build_route(
+            "GET", "/api/user/{id}", responses, "get_api_user_id",
+            sample_request={"query_params": {"active": "true"}},
+        )
+        assert "async def get_api_user_id(id: str, active: str = \"true\"):" in route
+
+        resp = _serve(route, "GET", "/api/user/42")
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"id": 1}
+
+        app, _ = _exec_route(route)
+        params = app.openapi()["paths"]["/api/user/{id}"]["get"].get("parameters", [])
+        by_name = {(p["name"], p["in"]) for p in params}
+        assert ("id", "path") in by_name
+        assert ("active", "query") in by_name
+
+    def test_default_mode_multiple_path_placeholders(self):
+        responses = [{"status": 201, "body": '{"placed": true}'}]
+        route = build_route(
+            "GET", "/api/user/{id}/orders/{order_id}", responses,
+            "get_api_user_id_orders_order_id",
+        )
+        assert "async def get_api_user_id_orders_order_id(id: str, order_id: str):" in route
+
+        resp = _serve(route, "GET", "/api/user/7/orders/9")
+        assert resp.status_code == 201, resp.text
+        assert resp.json() == {"placed": True}
+
+    def test_smart_body_route_declares_path_params(self):
+        # Body-routing handlers need path args too, or FastAPI rejects the
+        # request with "no path params were defined" once a placeholder
+        # exists in the decorator path.
+        responses = [
+            {"status": 200, "body": '{"ok": true}', "request": {"body": '{"role": "admin"}'}},
+            {"status": 403, "body": '{"ok": false}', "request": {"body": '{"role": "user"}'}},
+        ]
+        route = build_route(
+            "POST", "/api/user/{id}/role", responses, "post_api_user_id_role",
+            use_smart_fallback=True,
+        )
+        assert "async def post_api_user_id_role(request: Request, id: str):" in route
+
+        ok = _serve(route, "POST", "/api/user/5/role", json={"role": "admin"})
+        assert ok.status_code == 200, ok.text
+        forbidden = _serve(route, "POST", "/api/user/5/role", json={"role": "user"})
+        assert forbidden.status_code == 403, forbidden.text
+
+    def test_smart_query_route_declares_path_params(self):
+        responses = [
+            {"status": 200, "body": '{"a": 1}',
+             "request": {"query_params": {"active": "true"}}},
+            {"status": 404, "body": '{"a": 2}',
+             "request": {"query_params": {"active": "false"}}},
+        ]
+        route = build_route(
+            "GET", "/api/user/{id}/items", responses, "get_api_user_id_items",
+            use_smart_fallback=True, sample_request={"query_params": {"active": "true"}},
+        )
+        assert "async def get_api_user_id_items(id: str, active: str = \"true\"):" in route
+
+        miss = _serve(route, "GET", "/api/user/3/items", params={"active": "false"})
+        assert miss.status_code == 404, miss.text
+        hit = _serve(route, "GET", "/api/user/3/items", params={"active": "true"})
+        assert hit.status_code == 200, hit.text
+
+    def test_reserved_name_path_param_gets_alias(self):
+        # {status} would shadow the generated module's `status` import and
+        # break status.HTTP_* references, so it must be renamed with an alias.
+        route = build_route(
+            "GET", "/api/sys/{status}", [{"status": 200, "body": "{}"}],
+            "get_api_sys_status",
+        )
+        assert 'async def get_api_sys_status(status_: str = Path(..., alias="status")):' in route
+
+        resp = _serve(route, "GET", "/api/sys/active")
+        assert resp.status_code == 200, resp.text
+
+        app, _ = _exec_route(route)
+        params = app.openapi()["paths"]["/api/sys/{status}"]["get"].get("parameters", [])
+        assert [(p["name"], p["in"]) for p in params] == [("status", "path")]
+
+    def test_keyword_path_param_gets_alias(self):
+        route = build_route(
+            "GET", "/api/items/{class}", [{"status": 200, "body": "{}"}],
+            "get_api_items_class",
+        )
+        assert 'async def get_api_items_class(class_: str = Path(..., alias="class")):' in route
+
+        resp = _serve(route, "GET", "/api/items/tool")
+        assert resp.status_code == 200, resp.text
+
+    def test_route_without_params_keeps_empty_signature(self):
+        route = build_route(
+            "GET", "/api/health", [{"status": 200, "body": '{"ok": 1}'}],
+            "get_api_health",
+        )
+        assert "async def get_api_health():" in route
+
+        resp = _serve(route, "GET", "/api/health")
+        assert resp.status_code == 200, resp.text
+
+    def test_empty_response_route_still_declares_path_params(self):
+        # The no-HAR-data branch must not regress either.
+        route = build_route(
+            "GET", "/api/user/{id}", [], "get_api_user_id",
+            sample_request={"query_params": {"active": "true"}},
+        )
+        assert "async def get_api_user_id(id: str, active: str = \"true\"):" in route
+
+        resp = _serve(route, "GET", "/api/user/9")
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {}
 
 
 class TestScenarioListingEscaping:
