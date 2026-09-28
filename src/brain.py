@@ -4,7 +4,6 @@ Provides REST API for the dashboard.
 """
 
 import os
-import re
 import sys
 import json
 import tempfile
@@ -22,7 +21,7 @@ if sys.platform == 'win32':
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ValidationError
 
 # '%(levelname)' used to be missing its 's', so every log call raised
 # ValueError inside the formatter and dumped a "--- Logging error ---"
@@ -37,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from core.parser import HARParser
+from core.parser import HARParser, METHOD_TOKEN_PATTERN
 from core.generator import MockGenerator
 from _version import get_version
 
@@ -45,7 +44,8 @@ APP_VERSION = get_version()
 START_TIME = time.time()
 
 # RFC 7230 token characters: what a request method may legally consist of.
-_METHOD_TOKEN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+# Shared with core.parser so the CLI and API layers reject the same junk.
+_METHOD_TOKEN = METHOD_TOKEN_PATTERN
 
 
 class AppState:
@@ -156,6 +156,10 @@ class ParseResponse(BaseModel):
     total_endpoints: int = Field(..., description="Number of endpoints found")
     endpoints: list[EndpointInfo] = Field(..., description="Parsed endpoints")
     processing_time_ms: int = Field(..., description="Processing duration")
+    skipped: list[str] = Field(
+        default_factory=list,
+        description="Entries dropped with their reason (e.g. invalid HTTP method)",
+    )
 
 
 def get_uptime() -> str:
@@ -263,26 +267,46 @@ async def parse_har_file(file: UploadFile = File(...)):
         app_state.clear_endpoints()
 
         result_endpoints = []
-        for i, ep_data in enumerate(endpoints_data["endpoints"]):
-            endpoint_id = f"ep_{i}"
+        skipped: list[str] = []
+        endpoint_idx = 0
+        for ep_data in endpoints_data["endpoints"]:
+            # One malformed entry (an HTTP method that violates the RFC 7230
+            # token rule, e.g. "GET WITH SPACE") used to fail the entire
+            # upload with a 500. Validating entry-by-entry and skipping the
+            # bad ones keeps the rest of the archive usable.
+            try:
+                info = EndpointInfo(
+                    id=f"ep_{endpoint_idx}",
+                    path=ep_data["resource_path"],
+                    method=ep_data["method"],
+                    status=ep_data.get("sample_responses", [{}])[0].get("status", 200),
+                    generated=False,
+                )
+            except ValidationError as e:
+                reason = "; ".join(
+                    f"{err['loc'][0]}: {err['msg']}" for err in e.errors()
+                )
+                skipped.append(f"{ep_data.get('method')} {ep_data.get('resource_path')} -- {reason}")
+                logger.warning("Skipping endpoint %s %s: %s",
+                               ep_data.get("method"), ep_data.get("resource_path"), reason)
+                continue
+
+            endpoint_id = info.id
             ep_data["id"] = endpoint_id
+            ep_data["method"] = info.method
 
             app_state.endpoints[endpoint_id] = ep_data
 
-            result_endpoints.append(EndpointInfo(
-                id=endpoint_id,
-                path=ep_data["resource_path"],
-                method=ep_data["method"],
-                status=ep_data.get("sample_responses", [{}])[0].get("status", 200),
-                generated=False,
-            ))
+            result_endpoints.append(info)
+            endpoint_idx += 1
 
         processing_time = int((time.time() - start_time) * 1000)
 
         return ParseResponse(
-            total_endpoints=endpoints_data["total_endpoints"],
+            total_endpoints=len(result_endpoints),
             endpoints=result_endpoints,
-            processing_time_ms=processing_time
+            processing_time_ms=processing_time,
+            skipped=skipped,
         )
 
     except Exception as e:

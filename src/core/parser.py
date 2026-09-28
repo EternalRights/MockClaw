@@ -26,6 +26,11 @@ STATIC_URL_EXTENSIONS = frozenset([
 UUID_PATTERN = re.compile(r'/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.IGNORECASE)
 ID_PATTERN = re.compile(r'/[0-9]+(?=/|$)')
 
+# RFC 7230 token characters: what a request method may legally consist of.
+# Kept in sync with brain's EndpointInfo validator so both layers reject the
+# same set of junk methods.
+METHOD_TOKEN_PATTERN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+
 
 def _normalize_method(value: object) -> str:
     """Canonicalize an HTTP method coming out of a HAR file.
@@ -35,8 +40,18 @@ def _normalize_method(value: object) -> str:
     grouping, the smart-router guards, the function-name builder -- assumes
     the upper-case spelling, so a lower-case method silently loses conditional
     routing and splits one resource into two duplicate routes.
+
+    A method that violates the RFC 7230 token rule (embedded spaces,
+    slashes, parens: "GET WITH SPACE", "GET/POST") is not something a real
+    client can send, and brain's response schema rejects it entry-by-entry.
+    Falling back to GET here keeps CLI-generated mocks importable instead
+    of registering ``api_route(methods=["GET WITH SPACE"])`` routes no
+    request can ever reach. Token-shaped methods -- PROPFIND, MKCOL, "123" --
+    pass through untouched.
     """
     method = str(value).strip().upper() if value else ''
+    if method and not METHOD_TOKEN_PATTERN.match(method):
+        return 'GET'
     return method or 'GET'
 
 
