@@ -71,6 +71,34 @@ def _to_int(value: object, default: int) -> int:
         return default
 
 
+def _to_str(value: object, default: str = "") -> str:
+    """Coerce a HAR field to str, treating null as absent.
+
+    ``dict.get(k, "")`` only falls back when the *key* is missing. Exporters
+    (Chrome among them) emit ``"value": null`` for query and header entries
+    they could not resolve, and the Python ``None`` then travels the whole
+    pipeline: a null query value became ``q: str = "None"`` in the generated
+    handler plus an unreachable ``if q == None`` branch that silently served
+    the wrong recorded scenario. A null URL crashed the parse inside
+    ``urlparse``. Treat null like an absent field and stringify non-string
+    scalars, since HAR fields are strings on the wire.
+    """
+    if value is None:
+        return default
+    return value if isinstance(value, str) else str(value)
+
+
+def _as_mapping(value: object) -> dict:
+    """Return *value* when it is an object, else an empty dict.
+
+    ``headers``, ``queryString`` and ``entries`` are arrays of objects per
+    the HAR spec, but hand-edited archives carry a bare string or null where
+    an object belongs. Indexing into the raw item raised AttributeError and
+    aborted the entire parse.
+    """
+    return value if isinstance(value, dict) else {}
+
+
 @dataclass
 class HTTPRequest:
     """Represents a parsed HTTP request."""
@@ -117,13 +145,18 @@ class HARParser:
         """Load and parse the HAR file."""
         with open(self.har_file_path, 'r', encoding='utf-8') as f:
             har_data = json.load(f)
-        self.entries = (har_data.get('log') or {}).get('entries') or []
+        if not isinstance(har_data, dict):
+            har_data = {}
+        entries = _as_mapping(har_data.get('log')).get('entries')
+        # A hand-edited file may write a bare string or object where the
+        # entries array belongs; iterating that would walk characters or keys.
+        self.entries = entries if isinstance(entries, list) else []
         return har_data
 
     def _is_static_asset(self, entry: dict) -> bool:
         """Check if the entry is a static asset to filter out."""
-        request = entry.get('request') or {}
-        url = request.get('url', '')
+        request = _as_mapping(entry.get('request'))
+        url = _to_str(request.get('url'))
 
         # Parse the path out of the URL before taking the extension so that
         # query strings (e.g. /app.js?ver=1) and scheme/host don't break the
@@ -133,9 +166,9 @@ class HARParser:
         if ext in STATIC_URL_EXTENSIONS:
             return True
 
-        response = entry.get('response') or {}
-        content = response.get('content') or {}
-        mime_type = content.get('mimeType', '').lower()
+        response = _as_mapping(entry.get('response'))
+        content = _as_mapping(response.get('content'))
+        mime_type = _to_str(content.get('mimeType')).lower()
 
         for prefix in STATIC_MIME_PREFIXES:
             if mime_type.startswith(prefix):
@@ -156,31 +189,33 @@ class HARParser:
         """Convert headers list to dictionary."""
         result = {}
         for h in headers or []:
+            h = _as_mapping(h)
             name = h.get('name')
             if name:
-                result[name.lower()] = h.get('value', '')
+                result[str(name).lower()] = _to_str(h.get('value'))
         return result
 
     def _parse_request(self, entry: dict) -> HTTPRequest:
         """Parse a HAR entry's request."""
-        request = entry.get('request') or {}
-        url = request.get('url', '')
+        request = _as_mapping(entry.get('request'))
+        url = _to_str(request.get('url'))
 
         query_params = request.get('queryString') or []
         query_dict = {}
         for p in query_params:
+            p = _as_mapping(p)
             name = p.get('name')
             if name:
-                query_dict[name] = p.get('value', '')
+                query_dict[str(name)] = _to_str(p.get('value'))
 
         body = None
         if request.get('postData'):
-            post_data = request['postData']
+            post_data = _as_mapping(request['postData'])
             # HAR mimeType can carry parameters (e.g. "application/json;
             # charset=utf-8"); a plain equality check would drop the body.
-            mime_type = (post_data.get('mimeType') or '').split(';')[0].strip().lower()
+            mime_type = _to_str(post_data.get('mimeType')).split(';')[0].strip().lower()
             if mime_type == 'application/json':
-                body = post_data.get('text', '')
+                body = _to_str(post_data.get('text'))
 
         return HTTPRequest(
             url=url,
@@ -192,19 +227,20 @@ class HARParser:
 
     def _parse_response(self, entry: dict) -> HTTPResponse:
         """Parse a HAR entry's response."""
-        response = entry.get('response') or {}
-        content = response.get('content') or {}
+        response = _as_mapping(entry.get('response'))
+        content = _as_mapping(response.get('content'))
 
         content_type = None
         for header in response.get('headers') or []:
-            if header.get('name', '').lower() == 'content-type':
-                content_type = header.get('value')
+            header = _as_mapping(header)
+            if _to_str(header.get('name')).lower() == 'content-type':
+                content_type = _to_str(header.get('value'))
                 break
 
         return HTTPResponse(
             status=_to_int(response.get('status'), 200),
             headers=self._parse_headers(response.get('headers', [])),
-            body=content.get('text'),
+            body=_to_str(content.get('text')) or None,
             content_type=content_type,
             latency_ms=_to_int(entry.get('time'), 0),
         )
@@ -224,6 +260,11 @@ class HARParser:
         seen: set[tuple] = set()
 
         for entry in self.entries:
+            # A null or bare-string item in the entries array is not an
+            # entry at all; coercing it to {} would fabricate a bogus "GET /"
+            # endpoint, so drop it outright.
+            if not isinstance(entry, dict):
+                continue
             if self._is_static_asset(entry):
                 continue
 

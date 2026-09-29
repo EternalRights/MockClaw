@@ -645,6 +645,141 @@ class TestNullFieldTolerance:
         assert endpoints[0].responses[0].status == 200
         assert endpoints[0].responses[0].latency_ms == 0
 
+    def test_null_query_value_becomes_empty_string(self, tmp_path):
+        # Chrome writes "value": null for query params it could not resolve.
+        # get('value', '') only defaults on a *missing* key, so a Python None
+        # used to travel on and become the default `q: str = "None"` plus an
+        # unreachable `if q == None` branch in the generated handler.
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET", "url": "https://api.example.com/s",
+                        "headers": [], "queryString": [{"name": "q", "value": None}]},
+            "response": {"status": 200, "headers": [],
+                         "content": {"mimeType": "application/json", "text": "{}"}},
+            "time": 10,
+        }]}}
+        endpoints = self._parse(har, tmp_path)
+        assert endpoints[0].requests[0].query_params == {"q": ""}
+
+    def test_null_header_value_becomes_empty_string(self, tmp_path):
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET", "url": "https://api.example.com/a",
+                        "headers": [{"name": "X-Token", "value": None}],
+                        "queryString": []},
+            "response": {"status": 200, "headers": [],
+                         "content": {"mimeType": "application/json", "text": "{}"}},
+            "time": 10,
+        }]}}
+        endpoints = self._parse(har, tmp_path)
+        assert endpoints[0].requests[0].headers == {"x-token": ""}
+
+    def test_null_url_does_not_crash_the_parse(self, tmp_path):
+        # urlparse(None) raised inside the static-asset check before the
+        # request was even parsed, taking the whole file down.
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET", "url": None, "headers": [], "queryString": []},
+            "response": {"status": 200, "headers": [],
+                         "content": {"mimeType": "application/json", "text": "{}"}},
+            "time": 10,
+        }]}}
+        endpoints = self._parse(har, tmp_path)
+        assert len(endpoints) == 1
+        assert endpoints[0].resource_path == "/"
+
+    def test_non_string_url_does_not_crash_the_parse(self, tmp_path):
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET", "url": 123, "headers": [], "queryString": []},
+            "response": {"status": 200, "headers": [],
+                         "content": {"mimeType": "application/json", "text": "{}"}},
+            "time": 10,
+        }]}}
+        endpoints = self._parse(har, tmp_path)
+        assert len(endpoints) == 1
+
+    def test_non_mapping_list_items_are_skipped(self, tmp_path):
+        # A bare string where the HAR spec says object used to raise
+        # AttributeError ('str' object has no attribute 'get').
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET", "url": "https://api.example.com/a",
+                        "headers": ["not-an-object"],
+                        "queryString": ["not-an-object"]},
+            "response": {"status": 200, "headers": ["not-an-object"],
+                         "content": {"mimeType": "application/json", "text": "{}"}},
+            "time": 10,
+        }]}}
+        endpoints = self._parse(har, tmp_path)
+        assert len(endpoints) == 1
+        assert endpoints[0].requests[0].headers == {}
+        assert endpoints[0].requests[0].query_params == {}
+
+    def test_non_mapping_containers_do_not_crash(self, tmp_path):
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": "oops",
+            "response": "oops",
+            "time": 10,
+        }]}}
+        assert len(self._parse(har, tmp_path)) == 1
+
+    def test_null_entry_is_dropped_not_fabricated(self, tmp_path):
+        # A null in the entries array is not an entry; coercing it to {} would
+        # fabricate a bogus "GET /" endpoint next to the real one.
+        har = {"log": {"version": "1.2", "entries": [None, {
+            "request": {"method": "GET", "url": "https://api.example.com/real",
+                        "headers": [], "queryString": []},
+            "response": {"status": 200, "headers": [],
+                         "content": {"mimeType": "application/json", "text": "{}"}},
+            "time": 10,
+        }]}}
+        endpoints = self._parse(har, tmp_path)
+        assert len(endpoints) == 1
+        assert endpoints[0].resource_path == "/real"
+
+
+class TestNullQueryValueRouting:
+    """A null query value must replay as an absent param, not as "None"."""
+
+    def _route_from(self, har, tmp_path, smart=True):
+        f = tmp_path / "q.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+        data = HARParser(str(f)).export_as_dict()
+        return MockGenerator(use_smart_fallback=smart).generate_endpoint(
+            data["endpoints"][0]
+        ).generated_code
+
+    _HAR = {"log": {"version": "1.2", "entries": [
+        {"request": {"method": "GET", "url": "https://api.example.com/search",
+                     "headers": [], "queryString": [{"name": "q", "value": None}]},
+         "response": {"status": 404, "headers": [],
+                      "content": {"mimeType": "application/json",
+                                  "text": '{"err": "missing q"}'}},
+         "time": 10},
+        {"request": {"method": "GET", "url": "https://api.example.com/search?q=world",
+                     "headers": [], "queryString": [{"name": "q", "value": "world"}]},
+         "response": {"status": 200, "headers": [],
+                      "content": {"mimeType": "application/json",
+                                  "text": '{"r": "world"}'}},
+         "time": 10},
+    ]}}
+
+    def test_recorded_scenarios_both_replay(self, tmp_path):
+        # The mock used to answer 200 for the no-q request: the null value
+        # became the string "None" and `q == None` was unreachable, so the
+        # recorded 404 scenario was silently swallowed.
+        route = self._route_from(self._HAR, tmp_path)
+        assert "None" not in route
+
+        missing = _serve(route, "GET", "/search")
+        assert missing.status_code == 404, missing.text
+        assert missing.json() == {"err": "missing q"}
+
+        present = _serve(route, "GET", "/search", params={"q": "world"})
+        assert present.status_code == 200, present.text
+        assert present.json() == {"r": "world"}
+
+    def test_default_mode_uses_empty_string_default(self, tmp_path):
+        route = self._route_from(self._HAR, tmp_path, smart=False)
+        assert 'q: str = ""' in route
+        assert '"None"' not in route
+
 
 class TestMethodNormalization:
     """HAR methods are not guaranteed upper-case; downstream assumes they are."""
