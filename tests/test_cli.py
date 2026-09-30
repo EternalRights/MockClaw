@@ -157,6 +157,32 @@ class TestStatsCommand:
         data = json.loads(result.stdout)
         assert data["endpoints"]["GET /api/ok"]["status_codes"] == ["200"]
 
+    def test_stats_reports_plain_response_status(self, tmp_path):
+        # A non-JSON body replays through a bare Response(status_code=...).
+        # Reading only raises and JSONResponse reported those as a default 200.
+        (tmp_path / "dynamic_api.py").write_text(
+            '@app.get("/api/plain")\n'
+            'async def get_api_plain():\n'
+            '    return Response(status_code=503, content="down", media_type="text/plain")\n',
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["stats", str(tmp_path), "--json"])
+        data = json.loads(result.stdout)
+        assert data["endpoints"]["GET /api/plain"]["status_codes"] == ["503"]
+
+    def test_plain_response_status_does_not_double_count_json(self, tmp_path):
+        # The plain-Response pattern must not also match inside JSONResponse,
+        # which would report each JSON status twice.
+        (tmp_path / "dynamic_api.py").write_text(
+            '@app.post("/api/made")\n'
+            'async def post_api_made():\n'
+            '    return JSONResponse(status_code=201, content={"id": 7})\n',
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["stats", str(tmp_path), "--json"])
+        data = json.loads(result.stdout)
+        assert data["endpoints"]["POST /api/made"]["status_codes"] == ["201"]
+
     # --- endpoint discovery -------------------------------------------
 
     def test_stats_discovers_api_route_endpoints(self, tmp_path):
@@ -210,6 +236,33 @@ class TestStatsCommand:
         assert data["endpoints"]["POST /made"]["status_codes"] == ["201"]
         assert data["endpoints"]["GET /gone"]["status_codes"] == ["404"]
         assert data["endpoints"]["PROPFIND /dav"]["status_codes"] == ["207"]
+
+    def test_stats_reads_generated_non_json_response_status(self, tmp_path):
+        # End-to-end: a non-JSON response replays through a bare Response, and
+        # the report must still surface its recorded status.
+        from core.generator import MockGenerator
+        from core.parser import HARParser
+
+        har_path = tmp_path / "plain.har"
+        har_path.write_text(json.dumps({"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET", "url": "https://api.example.com/plain",
+                        "headers": [], "queryString": []},
+            "response": {"status": 503,
+                         "headers": [{"name": "Content-Type", "value": "text/plain"}],
+                         "content": {"mimeType": "text/plain", "text": "down"}},
+            "time": 10,
+        }]}}), encoding="utf-8")
+
+        out_dir = tmp_path / "out"
+        MockGenerator(use_smart_fallback=False).generate_all(
+            HARParser(str(har_path)).export_as_dict()["endpoints"],
+            output_dir=str(out_dir),
+        )
+
+        data = json.loads(
+            runner.invoke(app, ["stats", str(out_dir), "--json"]).stdout
+        )
+        assert data["endpoints"]["GET /plain"]["status_codes"] == ["503"]
 
     def test_stats_text_output(self, tmp_path):
         mock_file = tmp_path / "dynamic_api.py"

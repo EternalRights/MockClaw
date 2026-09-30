@@ -647,6 +647,10 @@ def stats(
     # the other as a default 200, which is how 201/204/207 went missing.
     raise_pat = re.compile(r"raise HTTPException\(status_code=(?:status\.)?(\w+)")
     json_status_pat = re.compile(r"JSONResponse\(status_code=(\d+)")
+    # A non-JSON recorded body replays through a plain Response; the
+    # lookbehind keeps this from also matching the JSONResponse form and
+    # double-counting every JSON status.
+    response_status_pat = re.compile(r"(?<![A-Za-z_])Response\(status_code=(\d+)")
     latency_pat = re.compile(r"await asyncio\.sleep\(([\d.]+)\)")
 
     def _status_label(raw: str) -> str:
@@ -689,7 +693,11 @@ def stats(
 
         ep["smart"] = "request: Request" in block
 
-        found = list(raise_pat.finditer(block)) + list(json_status_pat.finditer(block))
+        found = (
+            list(raise_pat.finditer(block))
+            + list(json_status_pat.finditer(block))
+            + list(response_status_pat.finditer(block))
+        )
         statuses = [
             _status_label(m.group(1))
             for m in sorted(found, key=lambda m: m.start())

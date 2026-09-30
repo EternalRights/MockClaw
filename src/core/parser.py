@@ -237,6 +237,13 @@ class HARParser:
                 content_type = _to_str(header.get('value'))
                 break
 
+        if not content_type:
+            # Chrome and friends record the type in content.mimeType and a
+            # HAR may omit response headers entirely. Without this fallback
+            # the mock has no type to replay the body under, so it forces
+            # every response out as application/json.
+            content_type = _to_str(content.get('mimeType')) or None
+
         return HTTPResponse(
             status=_to_int(response.get('status'), 200),
             headers=self._parse_headers(response.get('headers', [])),

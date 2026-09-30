@@ -68,6 +68,56 @@ def body_literal(body_text: str) -> str:
         return json.dumps(body_text)
 
 
+def _is_json_content_type(content_type: str | None) -> bool:
+    """Whether a recorded content type should be replayed as JSON.
+
+    Absent or blank types default to JSON: that is how the generator has
+    always behaved and the overwhelming majority of captured APIs are JSON.
+    """
+    if not content_type:
+        return True
+    return "json" in content_type.lower()
+
+
+def _replay_line(
+    status: int,
+    body_text: str,
+    content_type: str | None = None,
+    indent: str = _FB,
+) -> str:
+    """Build the statement that replays one recorded response.
+
+    Every recorded status and body is replayed through one path so the mock
+    answers exactly what the HAR captured. Returning the bare literal always
+    answered 200, misreporting a recorded 201, 204 or 302; raising
+    HTTPException did set the status but wrapped the body in ``{"detail":
+    ...}``. A plain 200 keeps the direct return; anything else goes out via
+    ``JSONResponse`` with the recorded status code and the recorded body.
+
+    A body the HAR recorded under a non-JSON content type (``text/plain``,
+    ``application/xml``, ...) goes out through ``Response`` verbatim.
+    Returning it as a Python string made FastAPI JSON-encode it -- a
+    recorded ``plain text`` was served as ``"plain text"`` -- and forced
+    the content-type to ``application/json``, so a client parsing the
+    recorded type could no longer read the response at all.
+    """
+    if not _is_json_content_type(content_type):
+        media = content_type or "text/plain"
+        # status_code leads the call so cli.stats' regex can read it, the
+        # same way it reads JSONResponse(status_code=...).
+        args: list[str] = []
+        if status != 200:
+            args.append(f"status_code={status}")
+        args.append(f"content={json.dumps(body_text, ensure_ascii=False)}")
+        args.append(f"media_type={json.dumps(media, ensure_ascii=False)}")
+        return f"{indent}return Response({', '.join(args)})"
+
+    body_expr = body_literal(body_text)
+    if status == 200:
+        return f"{indent}return {body_expr}"
+    return f"{indent}return JSONResponse(status_code={status}, content={body_expr})"
+
+
 def _docstring_safe(text: str) -> str:
     """Escape raw HAR body text before it goes into a triple-quoted docstring.
 
@@ -220,10 +270,11 @@ def build_route(
             f"{_FB}return {{}}\n"
         )
 
-    sc0 = all_responses[0].get("status") or 200
-    body0 = body_literal(all_responses[0].get("body") or "")
-
-    body_code = _return_line(sc0, body0)
+    first_resp = all_responses[0]
+    sc0 = first_resp.get("status") or 200
+    body_code = _replay_line(
+        sc0, first_resp.get("body") or "", first_resp.get("content_type")
+    )
 
     # Path placeholders and recorded query keys become typed handler
     # arguments. Without them the OpenAPI schema advertises a bare endpoint
@@ -256,23 +307,25 @@ def build_route(
 
 
 def _dedupe_requests(
-    parsed: list[tuple[dict[str, Any], int, Any]],
-) -> list[tuple[dict[str, Any], int, Any]]:
+    parsed: list[tuple[Any, ...]],
+) -> list[tuple[Any, ...]]:
     """Collapse duplicate request bodies, keeping the first response.
 
     Two entries with the same JSON body should route to one response, so a
-    repeated body is dropped after the first occurrence.
+    repeated body is dropped after the first occurrence. Entries are opaque
+    tuples of at least ``(key_dict, status, body)``; the trailing elements
+    (a content type, for the query router) ride along untouched.
     """
-    seen: dict[str, tuple[dict[str, Any], int, Any]] = {}
-    for req, status, resp in parsed:
-        key = json.dumps(req, sort_keys=True)
+    seen: dict[str, tuple[Any, ...]] = {}
+    for item in parsed:
+        key = json.dumps(item[0], sort_keys=True)
         if key not in seen:
-            seen[key] = (req, status, resp)
+            seen[key] = item
     return list(seen.values())
 
 
 def _select_discriminating_fields(
-    distinct: list[tuple[dict[str, Any], int, Any]],
+    distinct: list[tuple[Any, ...]],
     all_fields: list[str],
 ) -> list[str]:
     """Pick the smallest field set that separates every distinct response.
@@ -283,15 +336,18 @@ def _select_discriminating_fields(
     what lets routing work when a single field is not enough, e.g. requests
     that differ only on a secondary field like ``region`` while ``role``
     stays the same.
+
+    Only positions 0-2 (key dict, status, body) are inspected, so callers may
+    append extra fields (the recorded content type) without changing this.
     """
     n = len(distinct)
     resp_sig = [
-        (status, json.dumps(resp, sort_keys=True))
-        for _, status, resp in distinct
+        (item[1], json.dumps(item[2], sort_keys=True))
+        for item in distinct
     ]
 
     def keys(fields: list[str]) -> list[tuple]:
-        return [tuple(req.get(f) for f in fields) for req, _, _ in distinct]
+        return [tuple(item[0].get(f) for f in fields) for item in distinct]
 
     def collisions(fields: list[str]) -> set:
         ks = keys(fields)
@@ -482,16 +538,21 @@ def _generate_query_route(
 
     # Collect each response's query params and find the fields that separate
     # them, mirroring the body-based smart routing logic.
-    distinct: list[tuple[dict[str, Any], int, str]] = []
+    distinct: list[tuple[dict[str, Any], int, str, str | None]] = []
     for resp in all_responses:
         qp = resp.get("request", {}).get("query_params", {})
         if qp:
-            distinct.append((qp, resp.get("status") or 200, resp.get("body") or "{}"))
+            distinct.append((
+                qp,
+                resp.get("status") or 200,
+                resp.get("body") or "{}",
+                resp.get("content_type"),
+            ))
 
     distinct = _dedupe_requests(distinct)
 
     all_fields: list[str] = []
-    for qp, _, _ in distinct:
+    for qp, _, _, _ in distinct:
         for field in qp:
             if field not in all_fields:
                 all_fields.append(field)
@@ -528,7 +589,7 @@ def _generate_query_route(
     if fields:
         emitted: set[str] = set()
         first = True
-        for qp, status_, resp_body in distinct:
+        for qp, status_, resp_body, resp_ct in distinct:
             checks = [
                 f'{_safe_param_name(field)} == {_py_literal(qp[field])}'
                 for field in fields
@@ -545,21 +606,25 @@ def _generate_query_route(
             first = False
             lines.append(f"{_FB}{keyword} {condition}:")
 
-            resp_literal = body_literal(resp_body)
-            lines.append(_return_line(status_, resp_literal, _FB * 2))
+            lines.append(_replay_line(status_, resp_body, resp_ct, _FB * 2))
 
         default_response = next(
             (resp for resp in all_responses if 200 <= (resp.get("status") or 200) < 300),
             all_responses[0],
         )
         default_status = default_response.get("status") or 200
-        default_literal = body_literal(default_response.get("body") or "{}")
         lines.append(f'{_FB}else:')
-        lines.append(_return_line(default_status, default_literal, _FB * 2))
+        lines.append(_replay_line(
+            default_status,
+            default_response.get("body") or "{}",
+            default_response.get("content_type"),
+            _FB * 2,
+        ))
     else:
         sc0 = all_responses[0].get("status") or 200
-        body0 = body_literal(all_responses[0].get("body") or "{}")
-        lines.append(_return_line(sc0, body0))
+        lines.append(_replay_line(
+            sc0, all_responses[0].get("body") or "{}", all_responses[0].get("content_type")
+        ))
 
     return "\n".join(lines) + "\n"
 

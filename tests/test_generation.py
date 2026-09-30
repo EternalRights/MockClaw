@@ -1348,6 +1348,148 @@ class TestStatusCodeRendering:
         assert "status_code=418" in route
 
 
+class TestNonJsonResponseReplay:
+    """A non-JSON recorded response must replay verbatim, not JSON-quoted.
+
+    Returning the recorded text as a Python string made FastAPI JSON-encode
+    it -- a recorded ``plain text`` went out as ``"plain text"`` -- and forced
+    the content-type to application/json, so a client parsing the recorded
+    type could no longer read the response at all.
+    """
+
+    def test_text_plain_body_is_not_json_quoted(self):
+        route = build_route(
+            "GET", "/api/plain",
+            [{"status": 200, "body": "plain text", "content_type": "text/plain"}],
+            "get_api_plain",
+        )
+        assert 'Response(content="plain text", media_type="text/plain")' in route
+
+        resp = _serve(route, "GET", "/api/plain")
+        assert resp.status_code == 200
+        assert resp.text == "plain text", resp.text
+        assert resp.headers["content-type"].startswith("text/plain")
+
+    def test_recorded_charset_is_preserved(self):
+        route = build_route(
+            "GET", "/api/plain",
+            [{"status": 200, "body": "hi", "content_type": "text/plain; charset=utf-8"}],
+            "get_api_plain",
+        )
+        assert 'media_type="text/plain; charset=utf-8"' in route
+        resp = _serve(route, "GET", "/api/plain")
+        assert resp.headers["content-type"] == "text/plain; charset=utf-8"
+
+    def test_non_json_non_200_keeps_status(self):
+        route = build_route(
+            "GET", "/api/x",
+            [{"status": 500, "body": "boom", "content_type": "text/plain"}],
+            "get_api_x",
+        )
+        assert "status_code=500" in route
+        resp = _serve(route, "GET", "/api/x")
+        assert resp.status_code == 500
+        assert resp.text == "boom"
+
+    def test_xml_content_type_replayed(self):
+        route = build_route(
+            "GET", "/api/x",
+            [{"status": 200, "body": "<a>1</a>", "content_type": "application/xml"}],
+            "get_api_x",
+        )
+        resp = _serve(route, "GET", "/api/x")
+        assert resp.text == "<a>1</a>"
+        assert resp.headers["content-type"].startswith("application/xml")
+
+    def test_json_body_still_returns_a_python_object(self):
+        # Regression: JSON must keep the object-return path. Wrapping it in
+        # Response would drop FastAPI's serialisation of nested values.
+        route = build_route(
+            "GET", "/api/j",
+            [{"status": 200, "body": '{"a": 1}', "content_type": "application/json"}],
+            "get_api_j",
+        )
+        assert 'return {"a": 1}' in route
+        assert "Response(" not in route
+        resp = _serve(route, "GET", "/api/j")
+        assert resp.json() == {"a": 1}
+
+    def test_missing_content_type_stays_json(self):
+        route = build_route(
+            "GET", "/api/j",
+            [{"status": 200, "body": '{"a": 1}'}],
+            "get_api_j",
+        )
+        assert "Response(" not in route
+        assert _serve(route, "GET", "/api/j").json() == {"a": 1}
+
+    def test_query_route_replays_non_json_body(self):
+        responses = [
+            {"status": 200, "body": "alpha", "content_type": "text/plain",
+             "request": {"query_params": {"mode": "a"}}},
+            {"status": 200, "body": "beta", "content_type": "text/plain",
+             "request": {"query_params": {"mode": "b"}}},
+        ]
+        route = build_route(
+            "GET", "/api/s", responses, "get_api_s",
+            use_smart_fallback=True, sample_request={"query_params": {"mode": "a"}},
+        )
+        assert _serve(route, "GET", "/api/s", params={"mode": "b"}).text == "beta"
+        assert _serve(route, "GET", "/api/s", params={"mode": "a"}).text == "alpha"
+
+    def test_content_type_falls_back_to_content_mime_type(self, tmp_path):
+        # Chrome records the type in content.mimeType; a HAR that omits the
+        # response headers must still yield a type to replay the body under.
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET", "url": "https://api.example.com/p",
+                        "headers": [], "queryString": []},
+            "response": {"status": 200, "headers": [],
+                         "content": {"mimeType": "text/plain", "text": "plain text"}},
+            "time": 10,
+        }]}}
+        f = tmp_path / "t.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+        endpoints = HARParser(str(f)).get_endpoints()
+        assert endpoints[0].responses[0].content_type == "text/plain"
+
+    def test_header_content_type_wins_over_mime_type(self, tmp_path):
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET", "url": "https://api.example.com/p",
+                        "headers": [], "queryString": []},
+            "response": {"status": 200,
+                         "headers": [{"name": "Content-Type", "value": "text/csv"}],
+                         "content": {"mimeType": "text/plain", "text": "a,b"}},
+            "time": 10,
+        }]}}
+        f = tmp_path / "t.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+        endpoints = HARParser(str(f)).get_endpoints()
+        assert endpoints[0].responses[0].content_type == "text/csv"
+
+    def test_end_to_end_text_plain_through_generator(self, tmp_path):
+        # Full path: HAR -> parse -> generate -> serve. The mock must answer
+        # the recorded bytes and type, not a JSON-quoted copy.
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET", "url": "https://api.example.com/p",
+                        "headers": [], "queryString": []},
+            "response": {"status": 200,
+                         "headers": [{"name": "Content-Type", "value": "text/plain"}],
+                         "content": {"mimeType": "text/plain", "text": "plain text"}},
+            "time": 10,
+        }]}}
+        f = tmp_path / "t.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+        data = HARParser(str(f)).export_as_dict()
+        route = MockGenerator(use_smart_fallback=False).generate_endpoint(
+            data["endpoints"][0]
+        ).generated_code
+
+        resp = _serve(route, "GET", "/p")
+        assert resp.status_code == 200, resp.text
+        assert resp.text == "plain text", resp.text
+        assert resp.headers["content-type"].startswith("text/plain")
+
+
 class TestGeneratedRouteRuntime:
     """Generated routes must run, not merely compile."""
 
