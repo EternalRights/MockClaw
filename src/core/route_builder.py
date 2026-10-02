@@ -15,21 +15,6 @@ _FB = "    "
 _logger = logging.getLogger(__name__)
 
 
-def _return_line(status: int, body_expr: str, indent: str = _FB) -> str:
-    """Build the statement that replays one recorded response.
-
-    Every recorded status and body is replayed through one path so the mock
-    answers exactly what the HAR captured. Returning the bare literal always
-    answered 200, misreporting a recorded 201, 204 or 302; raising
-    HTTPException did set the status but wrapped the body in ``{"detail":
-    ...}``. A plain 200 keeps the direct return; anything else goes out via
-    ``JSONResponse`` with the recorded status code and the recorded body.
-    """
-    if status == 200:
-        return f"{indent}return {body_expr}"
-    return f"{indent}return JSONResponse(status_code={status}, content={body_expr})"
-
-
 def _py_literal(value: Any) -> str:
     """Render a JSON value as a runnable Python literal.
 
@@ -79,20 +64,78 @@ def _is_json_content_type(content_type: str | None) -> bool:
     return "json" in content_type.lower()
 
 
+# Response headers the mock must NOT copy verbatim.
+#
+# Hop-by-hop headers are the transport's business. The content-* family
+# describes an entity the mock already re-derives: Content-Length is
+# recomputed (a stale copy truncates or hangs the response), Content-Type
+# comes from the recorded media type, and a HAR stores the *decoded* body, so
+# replaying Content-Encoding would claim an encoding the bytes no longer have.
+# Date and Server are stamped by the server, and the access-control pair is
+# set by the middleware this generator injects -- replaying either produces a
+# second copy of a header the app already owns.
+_MANAGED_RESPONSE_HEADERS = frozenset({
+    "content-length", "content-type", "content-encoding",
+    "transfer-encoding", "connection", "keep-alive", "upgrade", "te",
+    "trailer", "proxy-authenticate", "proxy-authorization",
+    "date", "server",
+    "access-control-allow-origin", "access-control-allow-credentials",
+})
+
+# RFC 7230 token characters: what a header field name may legally consist of.
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+
+
+def _header_text(value: Any) -> str:
+    """Coerce a recorded header value to str, treating null as empty."""
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else str(value)
+
+
+def _replayable_headers(headers: dict[str, Any] | None) -> dict[str, str]:
+    """Filter recorded response headers down to the ones worth replaying.
+
+    Captured headers used to be dropped wholesale, so a mocked 302 carried no
+    ``Location`` and a mocked login set no cookie: a client that followed the
+    redirect or relied on the session cookie could not be exercised against
+    the mock at all. The server-owned ones (see ``_MANAGED_RESPONSE_HEADERS``)
+    are skipped, as are names that are not legal tokens and values holding
+    CR/LF or NUL -- those either make Starlette reject the response or let a
+    captured header smuggle a second one into the wire format.
+    """
+    if not headers:
+        return {}
+    replayable: dict[str, str] = {}
+    for name, value in headers.items():
+        key = _header_text(name).strip().lower()
+        if not key or key in _MANAGED_RESPONSE_HEADERS:
+            continue
+        if not _HEADER_NAME_RE.match(key):
+            continue
+        text = _header_text(value)
+        if any(ch in text for ch in "\r\n\x00"):
+            continue
+        replayable[key] = text
+    return replayable
+
+
 def _replay_line(
     status: int,
     body_text: str,
     content_type: str | None = None,
+    headers: dict[str, Any] | None = None,
     indent: str = _FB,
 ) -> str:
     """Build the statement that replays one recorded response.
 
-    Every recorded status and body is replayed through one path so the mock
-    answers exactly what the HAR captured. Returning the bare literal always
-    answered 200, misreporting a recorded 201, 204 or 302; raising
+    Every recorded status, body and header set is replayed through one path so
+    the mock answers exactly what the HAR captured. Returning the bare literal
+    always answered 200, misreporting a recorded 201, 204 or 302; raising
     HTTPException did set the status but wrapped the body in ``{"detail":
-    ...}``. A plain 200 keeps the direct return; anything else goes out via
-    ``JSONResponse`` with the recorded status code and the recorded body.
+    ...}``. A plain 200 with nothing to add keeps the direct return; anything
+    else goes out through ``JSONResponse`` (or ``Response``, see below) with
+    the recorded status code.
 
     A body the HAR recorded under a non-JSON content type (``text/plain``,
     ``application/xml``, ...) goes out through ``Response`` verbatim.
@@ -100,7 +143,14 @@ def _replay_line(
     recorded ``plain text`` was served as ``"plain text"`` -- and forced
     the content-type to ``application/json``, so a client parsing the
     recorded type could no longer read the response at all.
+
+    Replayable headers (``Location``, ``Set-Cookie``, ``ETag``, ...) are
+    attached only when present, so an endpoint whose HAR carried none of them
+    keeps emitting exactly the code it did before.
     """
+    hdrs = _replayable_headers(headers)
+    header_arg = f", headers={_py_literal(hdrs)}" if hdrs else ""
+
     if not _is_json_content_type(content_type):
         media = content_type or "text/plain"
         # status_code leads the call so cli.stats' regex can read it, the
@@ -110,12 +160,13 @@ def _replay_line(
             args.append(f"status_code={status}")
         args.append(f"content={json.dumps(body_text, ensure_ascii=False)}")
         args.append(f"media_type={json.dumps(media, ensure_ascii=False)}")
-        return f"{indent}return Response({', '.join(args)})"
+        return f"{indent}return Response({', '.join(args)}{header_arg})"
 
     body_expr = body_literal(body_text)
-    if status == 200:
+    if status == 200 and not hdrs:
         return f"{indent}return {body_expr}"
-    return f"{indent}return JSONResponse(status_code={status}, content={body_expr})"
+    status_arg = f"status_code={status}, " if status != 200 else ""
+    return f"{indent}return JSONResponse({status_arg}content={body_expr}{header_arg})"
 
 
 def _docstring_safe(text: str) -> str:
@@ -273,7 +324,10 @@ def build_route(
     first_resp = all_responses[0]
     sc0 = first_resp.get("status") or 200
     body_code = _replay_line(
-        sc0, first_resp.get("body") or "", first_resp.get("content_type")
+        sc0,
+        first_resp.get("body") or "",
+        first_resp.get("content_type"),
+        first_resp.get("headers"),
     )
 
     # Path placeholders and recorded query keys become typed handler
@@ -394,7 +448,10 @@ def _generate_smart_route(
     """
     latency = _latency_line(latency_ms)
 
-    parsed_requests: list[tuple[dict[str, Any], int, Any]] = []
+    # The raw body text, content type and headers ride along after the
+    # discriminator fields (positions 0-2) so the replay line can emit them
+    # unchanged instead of re-serialising a parsed copy.
+    parsed_requests: list[tuple[Any, ...]] = []
 
     for resp in all_responses:
         req_body = resp.get("request", {}).get("body", "")
@@ -406,7 +463,14 @@ def _generate_smart_route(
                 req_data = json.loads(req_body) if isinstance(req_body, str) else req_body
                 resp_data = json.loads(resp_body) if isinstance(resp_body, str) else resp_body
                 if isinstance(req_data, dict):
-                    parsed_requests.append((req_data, resp_status, resp_data))
+                    # resp_body is the recorded text the replay line emits; a
+                    # caller may hand over an already-parsed object instead,
+                    # in which case re-serialise it as the old code did.
+                    raw_body = resp_body if isinstance(resp_body, str) else json.dumps(resp_data)
+                    parsed_requests.append((
+                        req_data, resp_status, resp_data,
+                        raw_body, resp.get("content_type"), resp.get("headers"),
+                    ))
             except (json.JSONDecodeError, TypeError):
                 continue
 
@@ -416,8 +480,8 @@ def _generate_smart_route(
         return build_route(method, path, all_responses, func_name, use_smart_fallback=False, latency_ms=latency_ms)
 
     all_fields: list[str] = []
-    for req_data, _, _ in distinct:
-        for field in req_data:
+    for item in distinct:
+        for field in item[0]:
             if field not in all_fields:
                 all_fields.append(field)
 
@@ -445,7 +509,7 @@ def _generate_smart_route(
 
     emitted: set[str] = set()
     first = True
-    for req_data, status, resp_data in distinct:
+    for req_data, status, _resp_data, resp_body, resp_ct, resp_headers in distinct:
         checks = [
             (
                 f'body.get("{field}") == {_py_literal(req_data[field])}'
@@ -463,17 +527,22 @@ def _generate_smart_route(
         first = False
         lines.append(f"{_FB}{keyword} {condition}:")
 
-        resp_literal = body_literal(json.dumps(resp_data))
-        lines.append(_return_line(status, resp_literal, _FB * 2))
+        lines.append(_replay_line(status, resp_body, resp_ct, resp_headers, _FB * 2))
 
     default_response = next(
         (resp for resp in all_responses if 200 <= (resp.get("status") or 200) < 300),
         all_responses[0]
     )
-    default_resp = default_response.get("body", "{}")
+    default_resp = default_response.get("body") or "{}"
     default_status = default_response.get("status") or 200
     lines.append(f'{_FB}else:')
-    lines.append(_return_line(default_status, body_literal(default_resp), _FB * 2))
+    lines.append(_replay_line(
+        default_status,
+        default_resp,
+        default_response.get("content_type"),
+        default_response.get("headers"),
+        _FB * 2,
+    ))
 
     return "\n".join(lines) + "\n"
 
@@ -538,7 +607,7 @@ def _generate_query_route(
 
     # Collect each response's query params and find the fields that separate
     # them, mirroring the body-based smart routing logic.
-    distinct: list[tuple[dict[str, Any], int, str, str | None]] = []
+    distinct: list[tuple[Any, ...]] = []
     for resp in all_responses:
         qp = resp.get("request", {}).get("query_params", {})
         if qp:
@@ -547,13 +616,14 @@ def _generate_query_route(
                 resp.get("status") or 200,
                 resp.get("body") or "{}",
                 resp.get("content_type"),
+                resp.get("headers"),
             ))
 
     distinct = _dedupe_requests(distinct)
 
     all_fields: list[str] = []
-    for qp, _, _, _ in distinct:
-        for field in qp:
+    for item in distinct:
+        for field in item[0]:
             if field not in all_fields:
                 all_fields.append(field)
 
@@ -589,7 +659,7 @@ def _generate_query_route(
     if fields:
         emitted: set[str] = set()
         first = True
-        for qp, status_, resp_body, resp_ct in distinct:
+        for qp, status_, resp_body, resp_ct, resp_headers in distinct:
             checks = [
                 f'{_safe_param_name(field)} == {_py_literal(qp[field])}'
                 for field in fields
@@ -606,7 +676,7 @@ def _generate_query_route(
             first = False
             lines.append(f"{_FB}{keyword} {condition}:")
 
-            lines.append(_replay_line(status_, resp_body, resp_ct, _FB * 2))
+            lines.append(_replay_line(status_, resp_body, resp_ct, resp_headers, _FB * 2))
 
         default_response = next(
             (resp for resp in all_responses if 200 <= (resp.get("status") or 200) < 300),
@@ -618,12 +688,16 @@ def _generate_query_route(
             default_status,
             default_response.get("body") or "{}",
             default_response.get("content_type"),
+            default_response.get("headers"),
             _FB * 2,
         ))
     else:
         sc0 = all_responses[0].get("status") or 200
         lines.append(_replay_line(
-            sc0, all_responses[0].get("body") or "{}", all_responses[0].get("content_type")
+            sc0,
+            all_responses[0].get("body") or "{}",
+            all_responses[0].get("content_type"),
+            all_responses[0].get("headers"),
         ))
 
     return "\n".join(lines) + "\n"

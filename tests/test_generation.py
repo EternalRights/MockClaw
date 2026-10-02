@@ -1490,6 +1490,186 @@ class TestNonJsonResponseReplay:
         assert resp.headers["content-type"].startswith("text/plain")
 
 
+class TestResponseHeaderReplay:
+    """Recorded response headers must reach the client, minus the server's own.
+
+    Dropping them made a mocked 302 carry no Location and a mocked login set
+    no cookie, so a client that followed the redirect or depended on the
+    session cookie could not be exercised against the mock at all.
+    """
+
+    def _resp(self, status=200, body='{"ok": 1}', content_type="application/json",
+              headers=None):
+        r = {"status": status, "body": body, "content_type": content_type}
+        if headers is not None:
+            r["headers"] = headers
+        return r
+
+    def test_redirect_location_is_replayed(self):
+        route = build_route(
+            "GET", "/old",
+            [self._resp(302, "", "text/plain", {"location": "/new"})],
+            "get_old",
+        )
+        assert '"location": "/new"' in route
+        resp = _serve(route, "GET", "/old", follow_redirects=False)
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "/new"
+
+    def test_set_cookie_and_etag_are_replayed(self):
+        route = build_route(
+            "GET", "/login",
+            [self._resp(headers={
+                "set-cookie": "sid=abc; HttpOnly",
+                "etag": 'W/"v1"',
+                "cache-control": "max-age=60",
+                "x-request-id": "rid-1",
+            })],
+            "get_login",
+        )
+        resp = _serve(route, "GET", "/login")
+        assert resp.status_code == 200
+        assert resp.headers["set-cookie"] == "sid=abc; HttpOnly"
+        assert resp.headers["etag"] == 'W/"v1"'
+        assert resp.headers["cache-control"] == "max-age=60"
+        assert resp.headers["x-request-id"] == "rid-1"
+
+    def test_managed_headers_are_not_replayed(self):
+        # Content-Length is recomputed, Content-Encoding would claim an
+        # encoding the stored (decoded) body no longer has, Content-Type comes
+        # from the media type, Date/Server are the server's, the hop-by-hop
+        # ones belong to the transport and the CORS pair to the middleware.
+        route = build_route(
+            "GET", "/x",
+            [self._resp(headers={
+                "content-length": "999",
+                "content-encoding": "gzip",
+                "content-type": "application/json",
+                "date": "Mon, 01 Jan 1990 00:00:00 GMT",
+                "server": "nginx",
+                "transfer-encoding": "chunked",
+                "connection": "keep-alive",
+                "access-control-allow-origin": "https://evil.example",
+            })],
+            "get_x",
+        )
+        assert "headers=" not in route
+
+        resp = _serve(route, "GET", "/x")
+        assert resp.headers["content-length"] != "999"      # recomputed
+        assert resp.headers["content-length"] == str(len(resp.content))
+        assert "content-encoding" not in resp.headers       # no gzip lie
+        assert resp.headers["content-type"] == "application/json"
+
+    def test_invalid_header_name_is_skipped(self):
+        # A field name with a space is not an RFC 7230 token; Starlette would
+        # reject the response outright.
+        route = build_route(
+            "GET", "/x",
+            [self._resp(headers={"Bad Header": "x", "x-ok": "fine"})],
+            "get_x",
+        )
+        assert '"bad header"' not in route
+        assert '"x-ok": "fine"' in route
+        resp = _serve(route, "GET", "/x")
+        assert resp.headers["x-ok"] == "fine"
+
+    def test_crlf_header_value_is_skipped(self):
+        # A captured value carrying CRLF would let a header smuggle a second
+        # one onto the wire.
+        route = build_route(
+            "GET", "/x",
+            [self._resp(headers={"x-smuggle": "a\r\nX-Evil: 1", "x-ok": "fine"})],
+            "get_x",
+        )
+        assert "x-smuggle" not in route
+        resp = _serve(route, "GET", "/x")
+        assert resp.headers.get("x-evil") is None
+        assert resp.headers["x-ok"] == "fine"
+
+    def test_header_value_with_quotes_compiles_and_serves(self):
+        # ETag is W/"v1"; the literal must be escaped or the module will not
+        # even parse.
+        route = build_route(
+            "GET", "/x", [self._resp(headers={"etag": 'W/"v1"'})], "get_x",
+        )
+        compile(route, "<route>", "exec")
+        assert _serve(route, "GET", "/x").headers["etag"] == 'W/"v1"'
+
+    def test_no_replayable_headers_keeps_the_bare_return(self):
+        # Regression: an endpoint whose HAR recorded only managed headers must
+        # keep emitting exactly the code it did before.
+        route = build_route(
+            "GET", "/x",
+            [self._resp(201, headers={"content-type": "application/json"})],
+            "get_x",
+        )
+        assert route.strip().endswith('return JSONResponse(status_code=201, content={"ok": 1})')
+
+    def test_non_json_response_carries_headers(self):
+        route = build_route(
+            "GET", "/old",
+            [self._resp(302, "", "text/plain",
+                        {"location": "/new", "retry-after": "5"})],
+            "get_old",
+        )
+        assert "media_type=" in route and "headers=" in route
+        resp = _serve(route, "GET", "/old", follow_redirects=False)
+        assert resp.headers["location"] == "/new"
+        assert resp.headers["retry-after"] == "5"
+
+    def test_query_route_replays_headers_per_branch(self):
+        responses = [
+            self._resp(body='{"m": "a"}', headers={"x-mode": "a"},
+                       content_type="application/json") | {"request": {"query_params": {"mode": "a"}}},
+            self._resp(body='{"m": "b"}', headers={"x-mode": "b"},
+                       content_type="application/json") | {"request": {"query_params": {"mode": "b"}}},
+        ]
+        route = build_route(
+            "GET", "/q", responses, "get_q",
+            use_smart_fallback=True, sample_request={"query_params": {"mode": "a"}},
+        )
+        assert _serve(route, "GET", "/q", params={"mode": "b"}).headers["x-mode"] == "b"
+        assert _serve(route, "GET", "/q", params={"mode": "a"}).headers["x-mode"] == "a"
+
+    def test_smart_body_route_replays_headers(self):
+        responses = [
+            {"status": 200, "body": '{"access": "full"}',
+             "request": {"body": '{"role": "admin"}'}, "headers": {"x-role": "admin"}},
+            {"status": 403, "body": '{"access": "none"}',
+             "request": {"body": '{"role": "guest"}'}, "headers": {"x-role": "guest"}},
+        ]
+        route = build_route("POST", "/r", responses, "post_r", use_smart_fallback=True)
+        denied = _serve(route, "POST", "/r", json={"role": "guest"})
+        assert denied.status_code == 403
+        assert denied.headers["x-role"] == "guest"
+
+    def test_bytes_bodies_and_headers_round_trip_end_to_end(self, tmp_path):
+        # Full path through the parser: a recorded redirect HAR keeps its
+        # Location on the generated mock.
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET", "url": "https://api.example.com/old",
+                        "headers": [], "queryString": []},
+            "response": {"status": 302,
+                         "headers": [{"name": "Location", "value": "https://api.example.com/new"},
+                                     {"name": "Set-Cookie", "value": "sid=abc"},
+                                     {"name": "Content-Length", "value": "0"}],
+                         "content": {"mimeType": "text/plain", "text": ""}},
+            "time": 10,
+        }]}}
+        f = tmp_path / "t.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+        data = HARParser(str(f)).export_as_dict()
+        route = MockGenerator(use_smart_fallback=False).generate_endpoint(
+            data["endpoints"][0]
+        ).generated_code
+
+        resp = _serve(route, "GET", "/old", follow_redirects=False)
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "https://api.example.com/new"
+        assert resp.headers["set-cookie"] == "sid=abc"
+
+
 class TestGeneratedRouteRuntime:
     """Generated routes must run, not merely compile."""
 

@@ -183,6 +183,24 @@ class TestStatsCommand:
         data = json.loads(result.stdout)
         assert data["endpoints"]["POST /api/made"]["status_codes"] == ["201"]
 
+    def test_stats_reads_status_when_headers_are_attached(self, tmp_path):
+        # Replayed response headers add a headers={...} argument; the status
+        # must still be picked up, and a header dict must not read as one.
+        (tmp_path / "dynamic_api.py").write_text(
+            '@app.get("/api/old")\n'
+            'async def get_api_old():\n'
+            '    return JSONResponse(status_code=302, content={"to": "/new"}, '
+            'headers={"location": "/new", "x-attempt": "404"})\n\n'
+            '@app.get("/api/ok")\n'
+            'async def get_api_ok():\n'
+            '    return JSONResponse(content={"ok": True}, headers={"etag": "v1"})\n',
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["stats", str(tmp_path), "--json"])
+        data = json.loads(result.stdout)
+        assert data["endpoints"]["GET /api/old"]["status_codes"] == ["302"]
+        assert data["endpoints"]["GET /api/ok"]["status_codes"] == ["200"]
+
     # --- endpoint discovery -------------------------------------------
 
     def test_stats_discovers_api_route_endpoints(self, tmp_path):
