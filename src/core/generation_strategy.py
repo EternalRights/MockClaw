@@ -10,7 +10,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
-from .code_extractor import CodeExtractor
+from .code_extractor import CodeExtractor, defines_route
 from .llm_client_manager import LLMClientManager
 from .prompt_builder import PromptBuilder, SYSTEM_PROMPT
 from .route_builder import build_route, generate_func_name
@@ -128,15 +128,15 @@ class LLMGenerationStrategy(GenerationStrategy):
             code = self._code_extractor.extract_code(
                 response.choices[0].message.content or ""
             )
-            if not self._is_valid_python(code):
+            if not self._is_usable_route(code):
                 _logger.warning(
-                    "LLM returned non-compiling code for %s %s, falling back",
+                    "LLM returned an unusable route for %s %s, falling back",
                     endpoint_data.get("method"),
                     endpoint_data.get("resource_path"),
                 )
                 if self._fallback:
                     return self._fallback.generate(endpoint_data)
-                raise RuntimeError("LLM returned code that fails to compile")
+                raise RuntimeError("LLM returned code that is not a usable route")
             return code
         except Exception:
             if self._fallback:
@@ -144,15 +144,18 @@ class LLMGenerationStrategy(GenerationStrategy):
             raise RuntimeError("LLM generation failed and no fallback configured")
 
     @staticmethod
-    def _is_valid_python(code: str) -> bool:
-        """Return True when *code* parses as a Python module.
+    def _is_usable_route(code: str) -> bool:
+        """Return True when *code* compiles and actually registers a route.
 
-        compile() only checks syntax, not name resolution, so a snippet that
-        references not-yet-imported names still passes. That is fine here:
-        the goal is to catch genuinely broken output before it lands in the
-        generated server file.
+        compile() only checks syntax, and only for the snippet in isolation.
+        It happily accepts a helper-only or import-only snippet, which would
+        register nothing: the endpoint would silently answer 404 while the
+        template that would have worked was thrown away. The generator's whole
+        contract is one route per endpoint, so require one.
         """
         if not code.strip():
+            return False
+        if not defines_route(code):
             return False
         try:
             compile(code, "<generated>", "exec")

@@ -15,6 +15,7 @@ from core.code_extractor import CodeExtractor
 from core.generation_strategy import (
     GenerationStrategy,
     LLMGenerationStrategy,
+    TemplateGenerationStrategy,
 )
 from core.prompt_builder import PromptBuilder
 
@@ -1905,19 +1906,98 @@ class TestScenarioListingEscaping:
         assert body in namespace["get_api_quoted"].__doc__
 
 
+_LLM_ROUTE = '@app.get("/x")\nasync def get_x():\n    return {"from_llm": True}\n'
+_LLM_ENDPOINT = {
+    "method": "GET",
+    "resource_path": "/x",
+    "sample_request": {},
+    "sample_responses": [{"status": 200, "body": '{"ok": true}'}],
+}
+
+
+def _llm_strategy(content, fallback=None):
+    """Wire a fake OpenAI-compatible client into an LLM generation strategy."""
+
+    class _FakeResponse:
+        def __init__(self, content):
+            message = type("M", (), {"content": content})()
+            self.choices = [type("C", (), {"message": message})()]
+
+    class _FakeClient:
+        def __init__(self, content):
+            completions = type(
+                "Comp", (), {"create": lambda self, **kw: _FakeResponse(content)},
+            )()
+            self.chat = type("Chat", (), {"completions": completions})()
+
+    class _FakeManager:
+        def __init__(self, content):
+            self._content = content
+
+        def get_client(self):
+            return _FakeClient(self._content)
+
+        def call_with_retry(self, fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+    return LLMGenerationStrategy(
+        client_manager=_FakeManager(content),
+        prompt_builder=PromptBuilder(),
+        code_extractor=CodeExtractor(),
+        fallback=fallback,
+    )
+
+
 class TestLLMCodeValidation:
-    """LLM output that fails to compile must never reach the mock file."""
+    """LLM output that is not a usable route must never reach the mock file."""
 
     def test_valid_python(self):
-        assert LLMGenerationStrategy._is_valid_python(
+        assert LLMGenerationStrategy._is_usable_route(
             "@app.get('/x')\nasync def x():\n    return {}\n"
         )
 
     def test_syntax_error(self):
-        assert not LLMGenerationStrategy._is_valid_python("def broken(:\n")
+        assert not LLMGenerationStrategy._is_usable_route("def broken(:\n")
 
     def test_empty_string(self):
-        assert not LLMGenerationStrategy._is_valid_python("")
+        assert not LLMGenerationStrategy._is_usable_route("")
+
+    def test_helper_only_snippet_is_rejected(self):
+        # Compiles fine, registers nothing: accepting it silently drops the
+        # endpoint (the mock answers 404) and discards the working template.
+        assert not LLMGenerationStrategy._is_usable_route(
+            "from fastapi import APIRouter\n\ndef helper():\n    return 1\n"
+        )
+
+    def test_router_decorator_and_add_api_route_are_routes(self):
+        assert LLMGenerationStrategy._is_usable_route(
+            '@router.get("/x")\nasync def x():\n    return {}\n'
+        )
+        assert LLMGenerationStrategy._is_usable_route(
+            'app.add_api_route("/x", x, methods=["GET"])\n'
+        )
+
+    def test_reply_with_a_javascript_fence_still_yields_a_running_route(self):
+        # The `javascript` tag used to leak in as a bare name, which compiles
+        # and then NameErrors when the generated module is imported.
+        strategy = _llm_strategy(
+            "Here:\n```javascript\n" + _LLM_ROUTE + "```\n"
+        )
+        code = strategy.generate(dict(_LLM_ENDPOINT))
+        assert "from_llm" in code, code
+        assert code.splitlines()[0] == '@app.get("/x")', code
+        _exec_route(code)  # must import without a stray name
+
+    def test_helper_only_reply_falls_back_to_the_template(self):
+        # Compiles, registers nothing: accepting it would drop the endpoint.
+        strategy = _llm_strategy(
+            "```python\nfrom fastapi import APIRouter\n```\n",
+            fallback=TemplateGenerationStrategy(),
+        )
+        code = strategy.generate(dict(_LLM_ENDPOINT))
+        assert "from_llm" not in code, code
+        assert "@app.get" in code, code
+        _exec_route(code)
 
     def test_falls_back_on_broken_code(self):
         class _FakeResponse:
