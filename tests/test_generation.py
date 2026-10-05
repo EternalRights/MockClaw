@@ -10,7 +10,7 @@ import pytest
 
 from core.parser import HARParser
 from core.generator import MockGenerator, GenerationResult
-from core.route_builder import build_route, generate_func_name, body_literal
+from core.route_builder import build_route, generate_func_name, body_literal, _arg_signature
 from core.code_extractor import CodeExtractor
 from core.generation_strategy import (
     GenerationStrategy,
@@ -536,6 +536,123 @@ class TestUrlPathDecoding:
         resp = _serve(route, "GET", "/api/用户/1")
         assert resp.status_code == 200, resp.text
         assert resp.json() == {"name": "用户一"}
+
+
+class TestRepeatedPathPlaceholders:
+    """Two dynamic segments must not reuse one placeholder name.
+
+    Starlette rejects the path outright ("Duplicated param name id") and the
+    handler would declare the same argument twice, so the ordinary nested
+    resource shape /users/1/orders/2 produced a mock file that could not be
+    imported at all -- every endpoint in it went down.
+    """
+
+    def _path(self, url):
+        return HARParser("unused.har")._extract_url_path(url)
+
+    def test_two_numbered_segments_get_distinct_names(self):
+        assert self._path(
+            "https://api.example.com/users/1/orders/2"
+        ) == "/users/{id}/orders/{id_2}"
+
+    def test_three_numbered_segments_get_distinct_names(self):
+        assert self._path(
+            "https://api.example.com/a/1/b/2/c/3"
+        ) == "/a/{id}/b/{id_2}/c/{id_3}"
+
+    def test_two_uuids_get_distinct_names(self):
+        first = "550e8400-e29b-41d4-a716-446655440000"
+        second = "550e8400-e29b-41d4-a716-446655440001"
+        assert self._path(
+            f"https://api.example.com/a/{first}/b/{second}"
+        ) == "/a/{uuid}/b/{uuid_2}"
+
+    def test_uuid_and_numbered_segments_do_not_collide(self):
+        uuid = "550e8400-e29b-41d4-a716-446655440000"
+        assert self._path(
+            f"https://api.example.com/a/{uuid}/b/7"
+        ) == "/a/{uuid}/b/{id}"
+
+    def test_single_segment_keeps_the_plain_name(self):
+        assert self._path("https://api.example.com/users/1") == "/users/{id}"
+
+    def test_nested_id_route_imports_and_serves(self, tmp_path):
+        # End-to-end: the generated module used to raise SyntaxError on import.
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET",
+                        "url": "https://api.example.com/users/1/orders/2",
+                        "headers": [], "queryString": []},
+            "response": {"status": 200, "headers": [],
+                         "content": {"mimeType": "application/json",
+                                     "text": '{"order": 2}'}},
+            "time": 10,
+        }]}}
+        f = tmp_path / "t.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+        data = HARParser(str(f)).export_as_dict()
+        route = MockGenerator(use_smart_fallback=False).generate_endpoint(
+            data["endpoints"][0]
+        ).generated_code
+        assert '@app.get("/users/{id}/orders/{id_2}")' in route
+        assert "async def get_users_id_orders_id_2(id: str, id_2: str):" in route
+
+        resp = _serve(route, "GET", "/users/7/orders/9")
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"order": 2}
+
+
+class TestUniqueArgumentNames:
+    """A recorded key must never collide with another handler argument.
+
+    Python rejects a duplicate argument outright, so one colliding query key
+    ("/users/{id}?id=7", "?a b=1&a-b=2") took the whole mock file down.
+    """
+
+    def test_query_key_matching_a_path_placeholder(self):
+        assert _arg_signature("/users/{id}", {"id": "7"}) == [
+            "id: str",
+            'id_2: str = Query("7", alias="id")',
+        ]
+
+    def test_query_keys_that_sanitize_alike(self):
+        assert _arg_signature("/s", {"a b": "1", "a-b": "2"}) == [
+            'a_b: str = Query("1", alias="a b")',
+            'a_b_2: str = Query("2", alias="a-b")',
+        ]
+
+    def test_reserved_key_suffix_collision(self):
+        # "class" becomes "class_", which would collide with the recorded
+        # "class_" key.
+        assert _arg_signature("/s", {"class": "1", "class_": "2"}) == [
+            'class_: str = Query("1", alias="class")',
+            'class__2: str = Query("2", alias="class_")',
+        ]
+
+    def test_plain_path_args_lead_the_defaulted_ones(self):
+        # A renamed placeholder carries a default, and Python forbids a
+        # defaulted parameter ahead of a required one.
+        assert _arg_signature("/a/{class}/b/{id}", None) == [
+            "id: str",
+            'class_: str = Path(..., alias="class")',
+        ]
+
+    def test_route_with_colliding_query_key_imports_and_serves(self):
+        route = build_route(
+            "GET", "/users/{id}", [{"status": 200, "body": '{"ok": 1}'}],
+            "get_users_id", sample_request={"query_params": {"id": "7"}},
+        )
+        resp = _serve(route, "GET", "/users/7", params={"id": "7"})
+        assert resp.status_code == 200, resp.text
+
+    def test_both_aliased_query_keys_are_discoverable(self):
+        # openapi shows FastAPI bound each alias to its own recorded key.
+        route = build_route(
+            "GET", "/s", [{"status": 200, "body": '{"ok": 1}'}],
+            "get_s", sample_request={"query_params": {"a b": "1", "a-b": "2"}},
+        )
+        app, _ = _exec_route(route)
+        params = app.openapi()["paths"]["/s"]["get"].get("parameters", [])
+        assert {(p["name"], p["in"]) for p in params} == {("a b", "query"), ("a-b", "query")}
 
 
 class TestDuplicateEntryCollapse:

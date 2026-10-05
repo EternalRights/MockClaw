@@ -26,6 +26,26 @@ STATIC_URL_EXTENSIONS = frozenset([
 UUID_PATTERN = re.compile(r'/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.IGNORECASE)
 ID_PATTERN = re.compile(r'/[0-9]+(?=/|$)')
 
+
+def _unique_placeholders(pattern: re.Pattern, path: str, base: str) -> str:
+    """Replace matches with ``{base}``, ``{base_2}``, ``{base_3}``, ...
+
+    Naming one parameter twice is fatal twice over: Starlette refuses the
+    path outright ("Duplicated param name id"), and the generated handler
+    would declare the same argument twice, so the whole mock file failed to
+    import. The ordinary nested-resource capture /users/1/orders/2 collapsed
+    both numbered segments to ``{id}`` and hit exactly that. The first match
+    keeps the plain name, leaving single-segment paths byte-identical.
+    """
+    seen = 0
+
+    def replace(_match: re.Match) -> str:
+        nonlocal seen
+        seen += 1
+        return f"/{{{base}}}" if seen == 1 else f"/{{{base}_{seen}}}"
+
+    return pattern.sub(replace, path)
+
 # RFC 7230 token characters: what a request method may legally consist of.
 # Kept in sync with brain's EndpointInfo validator so both layers reject the
 # same set of junk methods.
@@ -188,8 +208,8 @@ class HARParser:
         # mocked 404 for the very request it recorded. unquote, not
         # unquote_plus -- '+' is a literal character in a path, not a space.
         path = unquote(parsed.path)
-        path = UUID_PATTERN.sub('/{uuid}', path)
-        path = ID_PATTERN.sub('/{id}', path)
+        path = _unique_placeholders(UUID_PATTERN, path, 'uuid')
+        path = _unique_placeholders(ID_PATTERN, path, 'id')
         return path or '/'
 
     def _parse_headers(self, headers: list | None) -> dict:

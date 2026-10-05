@@ -239,33 +239,54 @@ def _arg_signature(path: str, query_params: dict[str, Any] | None) -> list[str]:
     Query parameters keep their recorded value as the default so one
     handler can serve *all* recorded scenarios without FastAPI rejecting a
     request that omits a key a later branch might test.
+
+    Every emitted argument must also have a *distinct* name. A recorded
+    query key can sanitize onto a path placeholder (``/users/{id}?id=7``) or
+    onto another query key (``?a b=1&a-b=2``), and Python rejects the
+    duplicate outright ("duplicate argument 'id' in function definition"),
+    so the whole mock file failed to import over one such key. A name that
+    is already taken is suffixed and rebound through ``alias=`` so it still
+    binds to the key the HAR recorded.
     """
-    args: list[str] = []
+    used: set[str] = set()
+    required: list[str] = []
+    defaulted: list[str] = []
+
+    def _claim(name: str) -> str:
+        candidate, suffix = name, 2
+        while candidate in used:
+            candidate = f"{name}_{suffix}"
+            suffix += 1
+        used.add(candidate)
+        return candidate
 
     for name in _path_params(path):
-        safe = _safe_param_name(name)
+        safe = _claim(_safe_param_name(name))
         if safe == name:
-            args.append(f"{safe}: str")
+            required.append(f"{safe}: str")
         else:
-            args.append(f"{safe}: str = Path(..., alias={json.dumps(name)})")
+            defaulted.append(f"{safe}: str = Path(..., alias={json.dumps(name)})")
 
     if query_params:
         for param, default_val in query_params.items():
-            safe = _safe_param_name(param)
+            safe = _claim(_safe_param_name(param))
             # json.dumps handles quotes/backslashes/newlines inside the value;
             # a plain f-string interpolation would emit broken Python.
             default_literal = json.dumps(str(default_val))
             if safe == param:
-                args.append(f"{safe}: str = {default_literal}")
+                defaulted.append(f"{safe}: str = {default_literal}")
             else:
                 # FastAPI binds a query parameter on the argument name, so a
                 # sanitized name would never match the key the HAR recorded:
                 # "user-id" has to stay reachable as user-id, not user_id.
-                args.append(
+                defaulted.append(
                     f"{safe}: str = Query({default_literal}, "
                     f"alias={json.dumps(param, ensure_ascii=False)})"
                 )
-    return args
+
+    # A renamed placeholder carries a default, and Python forbids a defaulted
+    # parameter ahead of a required one, so the plain ones lead.
+    return required + defaulted
 
 
 def build_route(
