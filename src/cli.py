@@ -195,9 +195,12 @@ def record(
                 console.print(f"[red]❌ Dummy Shop returned status {resp.status_code}[/red]")
                 raise typer.Exit(1)
             progress.update(task, description="[green]✅ Dummy Shop is running[/green]")
-    except requests.exceptions.ConnectionError:
-        console.print("[red]❌ Cannot connect to Dummy Shop![/red]")
-        console.print("\n[yellow]Please start Dummy Shop first:[/yellow]")
+    except requests.exceptions.RequestException as e:
+        # RequestException covers the whole family: a refused connection, a
+        # timeout, and a --url that is not a URL at all (MissingSchema).
+        # Catching only ConnectionError let the rest escape as a traceback.
+        console.print(f"[red]❌ Cannot reach the Dummy Shop at {url}: {e}[/red]")
+        console.print("\n[yellow]Check the --url and start Dummy Shop first:[/yellow]")
         console.print("  [cyan]python tests/gauntlet/dummy_shop.py[/cyan]")
         raise typer.Exit(1)
     
@@ -438,21 +441,28 @@ def serve(
     try:
         test_sock.settimeout(1.0)
         result = test_sock.connect_ex((host.replace('0.0.0.0', '127.0.0.1'), port))
-        test_sock.close()
-        if result == 0:
-            console.print(f"\n[red]❌ Port {port} is already in use![/red]")
-            console.print("\n[yellow]Solutions:[/yellow]")
-            console.print(f"  1. Use a different port: [cyan]mockclaw serve {mock_dir} --port 8001[/cyan]")
-            console.print(f"  2. Find and stop the process using port {port}:")
-            if sys.platform == 'win32':
-                console.print(f"     [dim]netstat -ano | findstr :{port}[/dim]")
-                console.print(f"     [dim]taskkill /PID <PID> /F[/dim]")
-            else:
-                console.print(f"     [dim]lsof -i :{port}[/dim]")
-                console.print(f"     [dim]kill -9 <PID>[/dim]")
-            raise typer.Exit(1)
     except Exception:
+        # A host that cannot be probed (an unresolvable name, no route) is not
+        # a reason to stop here; uvicorn reports the real failure below.
+        result = -1
+    finally:
         test_sock.close()
+
+    if result == 0:
+        # Kept outside the try: typer.Exit derives from Exception, so raising
+        # it inside swallowed it and the "port in use" message was followed by
+        # a doomed attempt to bind the port anyway.
+        console.print(f"\n[red]❌ Port {port} is already in use![/red]")
+        console.print("\n[yellow]Solutions:[/yellow]")
+        console.print(f"  1. Use a different port: [cyan]mockclaw serve {mock_dir} --port 8001[/cyan]")
+        console.print(f"  2. Find and stop the process using port {port}:")
+        if sys.platform == 'win32':
+            console.print(f"     [dim]netstat -ano | findstr :{port}[/dim]")
+            console.print(f"     [dim]taskkill /PID <PID> /F[/dim]")
+        else:
+            console.print(f"     [dim]lsof -i :{port}[/dim]")
+            console.print(f"     [dim]kill -9 <PID>[/dim]")
+        raise typer.Exit(1)
     
     console.print(f"\n[bold]Endpoints:[/bold]")
     console.print(f"  📖 API docs: [cyan]http://{host.replace('0.0.0.0', 'localhost')}:{port}/docs[/cyan]")

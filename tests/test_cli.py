@@ -108,6 +108,45 @@ class TestServeCommand:
         result = runner.invoke(app, ["serve", "./nonexistent_dir_xyz"])
         assert result.exit_code != 0, "Should fail for missing directory"
 
+    def test_serve_refuses_a_port_that_is_already_in_use(self, tmp_path, monkeypatch):
+        # The guard raised typer.Exit inside `except Exception:` -- and
+        # typer.Exit derives from Exception -- so it was swallowed and the
+        # server went on to try to bind a port it had just reported as taken.
+        import socket
+        import uvicorn
+
+        mock_dir = tmp_path / "mocks"
+        mock_dir.mkdir()
+        (mock_dir / "dynamic_api.py").write_text("app = None\n", encoding="utf-8")
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+
+        started: list = []
+        monkeypatch.setattr(uvicorn, "run", lambda *a, **kw: started.append(a))
+        try:
+            result = runner.invoke(app, [
+                "serve", str(mock_dir), "--host", "127.0.0.1", "--port", str(port),
+            ])
+        finally:
+            listener.close()
+
+        assert result.exit_code != 0
+        assert "already in use" in result.output
+        assert started == [], "the server must not start on a taken port"
+
+
+class TestRecordCommand:
+    def test_invalid_url_is_reported_not_raised(self):
+        # Only ConnectionError was caught, so a --url that is not a URL came
+        # out as an unhandled MissingSchema traceback.
+        result = runner.invoke(app, ["record", "--url", "not-a-url"])
+        assert result.exit_code != 0
+        assert "not-a-url" in result.output
+        assert not isinstance(result.exception, Exception), result.exception
+
 
 class TestCLIErrorHandling:
     def test_invalid_command(self):
