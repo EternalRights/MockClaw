@@ -451,6 +451,93 @@ class TestStaticAssetFilter:
         assert parser._is_static_asset(entry) is True
 
 
+class TestUrlPathDecoding:
+    """Recorded URLs are percent-encoded; routes match the decoded path.
+
+    A HAR stores the URL as it went on the wire, and browsers always encode a
+    non-ASCII path. Emitting the encoded form produced a decorator no request
+    could ever reach -- Starlette matches against the path the server has
+    already decoded -- so a capture of /api/%E7%94%A8%E6%88%B7/1 mocked 404
+    for the very request it recorded.
+    """
+
+    def _path(self, url):
+        return HARParser("unused.har")._extract_url_path(url)
+
+    @pytest.mark.parametrize("url, expected", [
+        ("https://api.example.com/api/%E7%94%A8%E6%88%B7/1", "/api/用户/{id}"),
+        ("https://api.example.com/api/my%20file", "/api/my file"),
+        ("https://api.example.com/api/a%2Fb", "/api/a/b"),
+        ("https://api.example.com/api/%E4%B8%AD", "/api/中"),
+    ])
+    def test_encoded_segments_are_decoded(self, url, expected):
+        assert self._path(url) == expected
+
+    def test_plus_is_not_a_space(self):
+        # unquote_plus would turn the literal '+' into a space and move the
+        # route to a path the client never asks for.
+        assert self._path("https://api.example.com/api/a+b") == "/api/a+b"
+
+    def test_lone_percent_is_left_alone(self):
+        # Not a valid escape sequence; unquote must not mangle it.
+        assert self._path("https://api.example.com/api/100%discount") == "/api/100%discount"
+
+    def test_double_encoded_is_decoded_once(self):
+        # %2520 is an encoded "%20"; one pass yields "%20", which is exactly
+        # what the server hands over for that request.
+        assert self._path("https://api.example.com/api/%2520") == "/api/%20"
+
+    def test_already_decoded_path_is_unchanged(self):
+        assert self._path("https://api.example.com/api/用户/1") == "/api/用户/{id}"
+
+    def test_plain_path_is_unchanged(self):
+        assert self._path("https://api.example.com/v1/users") == "/v1/users"
+
+    def test_query_is_stripped_before_decoding(self):
+        # Only the path is decoded: a '+' or '%' in the query string must not
+        # bleed into the resource path.
+        assert self._path("https://api.example.com/api/x?q=a+b%2Fc") == "/api/x"
+
+    def test_recorded_url_keeps_its_encoded_form(self, tmp_path):
+        # The raw recording stays traceable; only the derived path is decoded.
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET",
+                        "url": "https://api.example.com/api/%E7%94%A8%E6%88%B7/1",
+                        "headers": [], "queryString": []},
+            "response": {"status": 200, "headers": [],
+                         "content": {"mimeType": "application/json", "text": '{"ok": 1}'}},
+            "time": 10,
+        }]}}
+        f = tmp_path / "t.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+        data = HARParser(str(f)).export_as_dict()
+        assert data["endpoints"][0]["resource_path"] == "/api/用户/{id}"
+        assert data["endpoints"][0]["sample_request"]["url"].endswith("%E7%94%A8%E6%88%B7/1")
+
+    def test_encoded_path_generates_a_reachable_route(self, tmp_path):
+        # End-to-end: the route must answer the request the HAR recorded.
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET",
+                        "url": "https://api.example.com/api/%E7%94%A8%E6%88%B7/1",
+                        "headers": [], "queryString": []},
+            "response": {"status": 200, "headers": [],
+                         "content": {"mimeType": "application/json",
+                                     "text": '{"name": "用户一"}'}},
+            "time": 10,
+        }]}}
+        f = tmp_path / "t.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+        data = HARParser(str(f)).export_as_dict()
+        route = MockGenerator(use_smart_fallback=False).generate_endpoint(
+            data["endpoints"][0]
+        ).generated_code
+        assert '@app.get("/api/用户/{id}")' in route
+
+        resp = _serve(route, "GET", "/api/用户/1")
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"name": "用户一"}
+
+
 class TestDuplicateEntryCollapse:
     """Identical entries from polling/retries should collapse to one."""
 

@@ -7,7 +7,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import json
 
@@ -180,7 +180,14 @@ class HARParser:
         """Extract the path from a URL, replacing dynamic segments."""
         clean_url = url.split('?')[0]
         parsed = urlparse(clean_url)
-        path = parsed.path
+        # A HAR records the URL as it went on the wire, so non-ASCII and
+        # reserved octets arrive percent-encoded (browsers always encode a
+        # CJK path). The generated route is matched against the path the
+        # server has already decoded, so emitting the encoded form produced a
+        # route nothing could reach: a capture of /api/%E7%94%A8%E6%88%B7/1
+        # mocked 404 for the very request it recorded. unquote, not
+        # unquote_plus -- '+' is a literal character in a path, not a space.
+        path = unquote(parsed.path)
         path = UUID_PATTERN.sub('/{uuid}', path)
         path = ID_PATTERN.sub('/{id}', path)
         return path or '/'
