@@ -64,6 +64,34 @@ class TestCallWithRetry:
 
         assert calls["n"] == 1
 
+    def test_zero_budget_reports_the_configuration(self):
+        # range(0) left nothing to raise and the bare `raise last_exc` came
+        # out as "TypeError: exceptions must derive from BaseException".
+        manager = LLMClientManager(max_retries=0)
+        calls = {"n": 0}
+
+        def fn(**kwargs):
+            calls["n"] += 1
+            return "done"
+
+        with pytest.raises(ValueError, match="max_retries"):
+            manager.call_with_retry(fn, model="m")
+
+        assert calls["n"] == 0, "no attempt should be made"
+
+    def test_single_budget_makes_one_attempt(self):
+        manager = LLMClientManager(max_retries=1)
+        calls = {"n": 0}
+
+        def flaky(**kwargs):
+            calls["n"] += 1
+            raise ConnectionError("network down")
+
+        with pytest.raises(ConnectionError):
+            manager.call_with_retry(flaky, model="m")
+
+        assert calls["n"] == 1
+
 
 class TestTransientErrorTypes:
     def test_openai_network_errors_join_transient_set(self):

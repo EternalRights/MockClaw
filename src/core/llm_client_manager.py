@@ -41,7 +41,8 @@ class LLMClientManager:
         api_key: Optional API key. Falls back to LLM_API_KEY then
                  OPENAI_API_KEY env vars.
         base_url: Optional base URL for the API endpoint.
-        max_retries: Maximum number of retry attempts for transient errors.
+        max_retries: Total attempts made for one call: the first try plus
+                     retries after it.
         retry_delay: Base delay in seconds between retries (exponential backoff).
         request_timeout: Timeout in seconds for each API request.
     """
@@ -127,8 +128,18 @@ class LLMClientManager:
             The result of the successful API call.
 
         Raises:
+            ValueError: If the configured budget allows no attempt at all.
             The last exception if all retries are exhausted.
         """
+        if self._max_retries < 1:
+            # range(0) leaves the loop with nothing to raise, so the bare
+            # `raise last_exc` below surfaced as "TypeError: exceptions must
+            # derive from BaseException" -- which says nothing about the real
+            # problem, a budget that permits no call at all.
+            raise ValueError(
+                f"max_retries must be at least 1 (one attempt), got {self._max_retries}"
+            )
+
         model = kwargs.get("model", "unknown")
         last_exc: Exception | None = None
         for attempt in range(self._max_retries):
