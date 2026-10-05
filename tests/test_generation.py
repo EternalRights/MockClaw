@@ -1875,6 +1875,81 @@ class TestResponseHeaderReplay:
         assert resp.headers["set-cookie"] == "sid=abc"
 
 
+class TestNonFiniteFloats:
+    """A recorded NaN/Infinity must not turn the endpoint into a 500.
+
+    json.loads accepts them; the JSON spec does not, and Starlette serialises
+    with allow_nan=False. _py_literal rendered them with repr() -- the *names*
+    nan/inf -- so the handler raised NameError, and handing the value back as
+    a Python object failed inside JSONResponse even once the literal parsed.
+    """
+
+    @pytest.mark.parametrize("body, expected", [
+        ('{"v": NaN}', '{"v": float("nan")}'),
+        ('{"v": Infinity}', '{"v": float("inf")}'),
+        ('{"v": -Infinity}', '{"v": float("-inf")}'),
+    ])
+    def test_non_finite_literals_name_a_value_not_a_bare_name(self, body, expected):
+        literal = body_literal(body)
+        assert literal == expected
+        # The point is the runtime lookup, so exec it rather than compile it.
+        namespace: dict = {"float": float}
+        exec(f"value = {literal}", namespace)  # must not raise NameError
+
+    @pytest.mark.parametrize("body", [
+        '{"v": NaN}', '{"v": Infinity}', '{"a": [1, NaN]}',
+    ])
+    def test_recorded_non_finite_body_is_replayed_verbatim(self, body):
+        route = build_route(
+            "GET", "/v",
+            [{"status": 200, "body": body, "content_type": "application/json"}],
+            "get_v",
+        )
+        assert "Response(content=" in route
+
+        resp = _serve(route, "GET", "/v")
+        assert resp.status_code == 200, resp.text
+        assert resp.text == body          # byte-for-byte, NaN included
+        assert resp.headers["content-type"].startswith("application/json")
+
+    def test_finite_json_is_still_an_object_return(self):
+        route = build_route("GET", "/v", [{"status": 200, "body": '{"v": 1.5}'}], "get_v")
+        assert 'return {"v": 1.5}' in route
+        assert _serve(route, "GET", "/v").json() == {"v": 1.5}
+
+    def test_smart_condition_with_a_non_finite_value_does_not_raise(self):
+        responses = [
+            {"status": 200, "body": '{"p": "a"}', "request": {"body": '{"v": NaN}'}},
+            {"status": 200, "body": '{"p": "b"}', "request": {"body": '{"v": 1}'}},
+        ]
+        route = build_route("POST", "/v", responses, "post_v", use_smart_fallback=True)
+        assert 'float("nan")' in route
+
+        resp = _serve(route, "POST", "/v", json={"v": 1})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"p": "b"}
+
+    def test_non_finite_body_round_trips_through_the_parser(self, tmp_path):
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET", "url": "https://api.example.com/v",
+                        "headers": [], "queryString": []},
+            "response": {"status": 200,
+                         "headers": [{"name": "Content-Type", "value": "application/json"}],
+                         "content": {"mimeType": "application/json", "text": '{"v": NaN}'}},
+            "time": 10,
+        }]}}
+        f = tmp_path / "t.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+        data = HARParser(str(f)).export_as_dict()
+        route = MockGenerator(use_smart_fallback=False).generate_endpoint(
+            data["endpoints"][0]
+        ).generated_code
+
+        resp = _serve(route, "GET", "/v")
+        assert resp.status_code == 200, resp.text
+        assert resp.text == '{"v": NaN}'
+
+
 class TestGeneratedRouteRuntime:
     """Generated routes must run, not merely compile."""
 

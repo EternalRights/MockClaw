@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from typing import Any
 
@@ -31,6 +32,11 @@ def _py_literal(value: Any) -> str:
     if isinstance(value, str):
         return json.dumps(value, ensure_ascii=False)
     if isinstance(value, (int, float)):
+        # repr() renders a non-finite float as the *name* nan/inf, which is
+        # not Python at all: a recorded NaN became `return {"v": nan}` and
+        # every request to that endpoint answered 500 with NameError.
+        if isinstance(value, float) and not math.isfinite(value):
+            return f"float({json.dumps(str(value))})"
         return repr(value)
     if isinstance(value, list):
         return "[" + ", ".join(_py_literal(v) for v in value) + "]"
@@ -62,6 +68,29 @@ def _is_json_content_type(content_type: str | None) -> bool:
     if not content_type:
         return True
     return "json" in content_type.lower()
+
+
+def _has_non_finite_constant(body_text: str) -> bool:
+    """Whether *body_text* is JSON only a lax parser accepts.
+
+    ``json.loads`` takes ``NaN`` and ``Infinity``; the JSON spec and
+    Starlette's serialiser (``allow_nan=False``) do not. Such a body cannot
+    be handed back as a Python object -- the response raises instead of
+    answering -- so it is replayed as the bytes the HAR captured. A body that
+    is not JSON at all is left to the content-type decision.
+    """
+    seen = False
+
+    def _mark(_name: str) -> None:
+        nonlocal seen
+        seen = True
+        return None
+
+    try:
+        json.loads(body_text, parse_constant=_mark)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return seen
 
 
 # Response headers the mock must NOT copy verbatim.
@@ -138,7 +167,8 @@ def _replay_line(
     the recorded status code.
 
     A body the HAR recorded under a non-JSON content type (``text/plain``,
-    ``application/xml``, ...) goes out through ``Response`` verbatim.
+    ``application/xml``, ...) -- or one that only a lax parser accepts, see
+    ``_has_non_finite_constant`` -- goes out through ``Response`` verbatim.
     Returning it as a Python string made FastAPI JSON-encode it -- a
     recorded ``plain text`` was served as ``"plain text"`` -- and forced
     the content-type to ``application/json``, so a client parsing the
@@ -151,7 +181,7 @@ def _replay_line(
     hdrs = _replayable_headers(headers)
     header_arg = f", headers={_py_literal(hdrs)}" if hdrs else ""
 
-    if not _is_json_content_type(content_type):
+    if not _is_json_content_type(content_type) or _has_non_finite_constant(body_text):
         media = content_type or "text/plain"
         # status_code leads the call so cli.stats' regex can read it, the
         # same way it reads JSONResponse(status_code=...).
