@@ -247,7 +247,7 @@ def generate(
     no_llm: bool = typer.Option(
         False,
         "--no-llm",
-        help="Disable LLM, use simple template fallback (no smart routing)",
+        help="Disable LLM; combine with --smart-fallback for rule-based routing",
     ),
     smart_fallback: bool = typer.Option(
         False,
@@ -268,8 +268,9 @@ def generate(
     
     Modes:
       - Default: LLM-assisted if API key configured, otherwise template fallback
-      - --no-llm: Simple template fallback (returns HAR response as-is)
+      - --no-llm: Skip the LLM and use the template fallback
       - --smart-fallback: Smart routing based on request body field analysis
+        (combines with --no-llm: rule-based routing without the LLM)
       - --simulate-latency: Inject realistic response delays from HAR timings
     
     Examples:
@@ -318,8 +319,19 @@ def generate(
             task2 = progress.add_task("[cyan]Generating mocks...", total=None)
             
             if no_llm:
-                mode = "Template Fallback (simple, no smart routing)"
-                generator = MockGenerator(use_smart_fallback=False, simulate_latency=simulate_latency)
+                # --no-llm is about the LLM, not about routing. Forcing the
+                # simple template here silently dropped a --smart-fallback the
+                # user asked for: the recorded conditional scenarios were
+                # thrown away and nothing said so.
+                generator = MockGenerator(
+                    use_smart_fallback=smart_fallback,
+                    simulate_latency=simulate_latency,
+                )
+                mode = (
+                    "Template Fallback + Smart Fallback (rule-based routing)"
+                    if smart_fallback
+                    else "Template Fallback (simple, no smart routing)"
+                )
             elif smart_fallback:
                 mode = "Smart Fallback (rule-based routing)"
                 generator = MockGenerator(use_smart_fallback=True, simulate_latency=simulate_latency)

@@ -54,6 +54,55 @@ class TestGenerateCommand:
             "Generated file should exist"
 
 
+class TestGenerateFlagCombinations:
+    """--no-llm is about the LLM, not about routing."""
+
+    def _har_with_two_scenarios(self, tmp_path):
+        def entry(role, status, body):
+            return {
+                "request": {"method": "POST", "url": "https://api.example.com/api/r",
+                            "headers": [], "queryString": [],
+                            "postData": {"mimeType": "application/json",
+                                         "text": json.dumps({"role": role})}},
+                "response": {"status": status, "headers": [],
+                             "content": {"mimeType": "application/json",
+                                         "text": json.dumps(body)}},
+                "time": 10,
+            }
+
+        f = tmp_path / "t.har"
+        f.write_text(json.dumps({"log": {"version": "1.2", "entries": [
+            entry("admin", 200, {"a": "full"}),
+            entry("guest", 403, {"a": "none"}),
+        ]}}), encoding="utf-8")
+        return f
+
+    def _generated(self, tmp_path, *args):
+        out = tmp_path / ("out_" + "_".join(a.strip("-") for a in args or ["default"]))
+        result = runner.invoke(app, [
+            "generate", str(self._har_with_two_scenarios(tmp_path)), str(out), *args,
+        ])
+        assert result.exit_code == 0, result.output
+        src = (out / "dynamic_api.py").read_text(encoding="utf-8")
+        return src.split("# === Generated Endpoints ===")[-1], result.output
+
+    def test_smart_fallback_alone_routes_on_the_body(self, tmp_path):
+        endpoints, _ = self._generated(tmp_path, "--smart-fallback")
+        assert "await request.json()" in endpoints
+
+    def test_no_llm_alone_stays_simple(self, tmp_path):
+        endpoints, _ = self._generated(tmp_path, "--no-llm")
+        assert "await request.json()" not in endpoints
+
+    def test_no_llm_plus_smart_fallback_still_routes_on_the_body(self, tmp_path):
+        # The two used to be exclusive: --no-llm forced use_smart_fallback
+        # False, so the requested rule-based routing was silently dropped and
+        # the recorded 403 scenario went with it.
+        endpoints, output = self._generated(tmp_path, "--no-llm", "--smart-fallback")
+        assert "await request.json()" in endpoints
+        assert "smart" in output.lower()
+
+
 class TestServeCommand:
     def test_serve_missing_directory(self):
         result = runner.invoke(app, ["serve", "./nonexistent_dir_xyz"])
