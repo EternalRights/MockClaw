@@ -7,6 +7,7 @@ import asyncio
 import argparse
 import json
 import math
+import os
 import time
 import sys
 import subprocess
@@ -75,6 +76,20 @@ def _format_ms(value: float) -> float:
     return round(value, 2)
 
 
+def _exit_code(results: dict[str, Any]) -> int:
+    """Return 0 only for a completed run with no failures.
+
+    The aborted form used to carry no ``failures`` key at all, so reading the
+    count alone reported success for a suite that never started its mock
+    server: ``mockclaw test`` printed "All chaos tests passed!" and exited 0
+    after the run had aborted. The status is what decides here; a completed
+    run carries no status key and is judged on its failure count.
+    """
+    if results.get("status") in ("aborted", "error"):
+        return 1
+    return 0 if results.get("failures", 0) == 0 else 1
+
+
 class EnhancedChaosBreaker:
     """Enhanced adversarial testing engine."""
 
@@ -84,6 +99,23 @@ class EnhancedChaosBreaker:
         self.results: list[dict[str, Any]] = []
         self.failures: list[str] = []
         self.server_process: subprocess.Popen | None = None
+        self._server_log: Any = None
+
+    def _open_server_log(self):
+        """Open the file the mock server's output is redirected into.
+
+        A pipe is only safe if something drains it; nothing here does, and a
+        full pipe stops the server dead. A file cannot fill up.
+        """
+        log_path = Path("logs/mock_server.log")
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._server_log = open(log_path, "wb")
+        return self._server_log
+
+    def _close_server_log(self) -> None:
+        if self._server_log is not None:
+            self._server_log.close()
+            self._server_log = None
 
     def log(self, message: str, level: str = "INFO") -> None:
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -130,24 +162,45 @@ class EnhancedChaosBreaker:
 
         try:
             module_path = f"{self.mock_dir.name}.dynamic_api:app"
-            self.server_process = subprocess.Popen(
-                [sys.executable, "-m", "uvicorn", module_path, "--host", "0.0.0.0", "--port", "8000"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
+            # The server imports the mock package by name, so the directory
+            # *containing* it has to be importable -- and that has to be told
+            # to the child. Adding it to this process's sys.path (as this did)
+            # ran after the spawn and never reached the server, so a mock dir
+            # outside the current directory failed with "No module named
+            # 'mocks'", the server never came up and the suite aborted.
+            parent_dir = str(self.mock_dir.resolve().parent)
+            env = os.environ.copy()
+            existing_path = env.get("PYTHONPATH")
+            env["PYTHONPATH"] = (
+                f"{parent_dir}{os.pathsep}{existing_path}" if existing_path
+                else parent_dir
             )
 
-            parent_dir = str(self.mock_dir.resolve().parent)
-            if parent_dir not in sys.path:
-                sys.path.insert(0, parent_dir)
+            self.server_process = subprocess.Popen(
+                [sys.executable, "-m", "uvicorn", module_path, "--host", "0.0.0.0", "--port", "8000"],
+                # The server's output must go somewhere that cannot block it.
+                # With stdout/stderr as pipes and nothing reading them,
+                # uvicorn's per-request access log filled the OS pipe buffer
+                # -- about 4KB on Windows -- and the server simply stopped
+                # answering: requests 69 onward timed out, and the suite ran
+                # into the CLI's timeout instead of finishing. A file keeps
+                # the reason a startup fails retrievable.
+                stdout=self._open_server_log(),
+                stderr=subprocess.STDOUT,
+                env=env,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
+            )
 
             self.log("Waiting for server to start...")
             if self._wait_for_server():
                 self.log("Server started successfully")
                 return True
-            else:
-                self.log("Server health check timed out", "FAIL")
-                return False
+
+            self.log("Server health check timed out", "FAIL")
+            # It is still running (and holding the port) otherwise, so every
+            # later run would fail to bind until it is killed by hand.
+            self.stop_mock_server()
+            return False
 
         except Exception as e:
             self.log(f"Failed to start server: {e}", "FAIL")
@@ -169,6 +222,9 @@ class EnhancedChaosBreaker:
                     self.server_process.kill()
                 except Exception:
                     pass
+            finally:
+                self.server_process = None
+                self._close_server_log()
 
     async def test_concurrency(self, num_requests: int = 50):
         try:
@@ -369,7 +425,15 @@ class EnhancedChaosBreaker:
 
         if not self.start_mock_server():
             self.log("Failed to start server, aborting tests", "FAIL")
-            return {"status": "aborted", "reason": "server_start_failed"}
+            # Same shape as the completed summary, so a reader cannot mistake
+            # a missing key for a clean run; the status is what fails it.
+            return {
+                "status": "aborted",
+                "reason": "server_start_failed",
+                "total_tests": 0,
+                "failures": 0,
+                "results": {},
+            }
 
         try:
             for idx, (name, label, fn) in enumerate(test_suite, start=1):
@@ -460,7 +524,7 @@ async def main(argv: list[str] | None = None) -> int:
         results_path.write_text(json.dumps(results, indent=2), encoding='utf-8')
         print(f"\nResults saved to: {results_path}")
 
-    return 0 if results.get("failures", 0) == 0 else 1
+    return _exit_code(results)
 
 
 if __name__ == "__main__":
