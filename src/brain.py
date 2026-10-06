@@ -58,6 +58,12 @@ class AppState:
     def __init__(self) -> None:
         self.endpoints: dict[str, dict[str, Any]] = {}
         self.generation_logs: list[dict[str, str]] = []
+        # Endpoints whose most recent generation attempt failed. Kept apart
+        # from generation_logs on purpose: that buffer is bounded and the
+        # dashboard can clear it, and a statistic is not a property of the log
+        # panel -- clearing logs used to report zero failed generations, and
+        # failures older than the last 1000 log entries were never counted.
+        self.failed_generations: set[str] = set()
         self._max_log_entries: int = 1000
         self._generator = MockGenerator(use_smart_fallback=True)
 
@@ -87,6 +93,17 @@ class AppState:
 
     def clear_endpoints(self) -> None:
         self.endpoints.clear()
+        self.failed_generations.clear()
+
+    def mark_generation_failed(self, endpoint_id: str) -> None:
+        self.failed_generations.add(endpoint_id)
+
+    def mark_generation_succeeded(self, endpoint_id: str) -> None:
+        self.failed_generations.discard(endpoint_id)
+
+    def forget_endpoint(self, endpoint_id: str) -> None:
+        self.endpoints.pop(endpoint_id, None)
+        self.failed_generations.discard(endpoint_id)
 
 
 app_state = AppState()
@@ -351,6 +368,9 @@ async def generate_mock(request: GenerateRequest):
         app_state.endpoints[endpoint_id]["generated"] = True
         app_state.endpoints[endpoint_id]["generated_at"] = datetime.now().isoformat()
         app_state.endpoints[endpoint_id]["generated_code"] = result.generated_code
+        app_state.mark_generation_succeeded(endpoint_id)
+    else:
+        app_state.mark_generation_failed(endpoint_id)
 
     logger.info(f"Generated mock for endpoint: {endpoint_id} (success={succeeded})")
 
@@ -396,7 +416,7 @@ async def delete_endpoint(endpoint_id: str):
     if endpoint_id not in app_state.endpoints:
         raise HTTPException(status_code=404, detail="Endpoint not found")
 
-    del app_state.endpoints[endpoint_id]
+    app_state.forget_endpoint(endpoint_id)
 
     logger.info(f"Deleted endpoint: {endpoint_id}")
     return {"success": True}
@@ -430,14 +450,17 @@ async def generate_all_endpoints():
     for (endpoint_id, endpoint), result in zip(pending, results):
         if isinstance(result, Exception):
             _add_log("error", f"Generation error for {endpoint_id}: {result}")
+            app_state.mark_generation_failed(endpoint_id)
             continue
         if result.success:
             successful += 1
             app_state.endpoints[endpoint_id]["generated"] = True
             app_state.endpoints[endpoint_id]["generated_at"] = datetime.now().isoformat()
             app_state.endpoints[endpoint_id]["generated_code"] = result.generated_code
+            app_state.mark_generation_succeeded(endpoint_id)
             _add_log("success", f"Generated {endpoint['method']} {endpoint['resource_path']}")
         else:
+            app_state.mark_generation_failed(endpoint_id)
             _add_log("error", f"Failed {endpoint['method']} {endpoint['resource_path']}: {result.error}")
 
     logger.info(f"Batch generation complete: {successful}/{len(pending)}")
@@ -453,7 +476,7 @@ class StatsResponse(BaseModel):
     total_endpoints: int = Field(..., description="Total parsed endpoints")
     generated: int = Field(..., description="Number of generated endpoints")
     pending: int = Field(..., description="Number of endpoints awaiting generation")
-    failures: int = Field(..., description="Number of failed generations")
+    failures: int = Field(..., description="Endpoints whose latest generation attempt failed")
     uptime: str = Field(..., description="Service uptime")
 
 
@@ -462,15 +485,11 @@ async def get_stats():
     """Return generation statistics and current state summary."""
     endpoints = app_state.endpoints
     generated = sum(1 for ep in endpoints.values() if ep.get("generated"))
-    failures = sum(
-        1 for log in app_state.get_recent_logs(1000)
-        if log.get("level") == "error"
-    )
     return StatsResponse(
         total_endpoints=len(endpoints),
         generated=generated,
         pending=len(endpoints) - generated,
-        failures=failures,
+        failures=len(app_state.failed_generations),
         uptime=get_uptime(),
     )
 

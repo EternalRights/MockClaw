@@ -225,3 +225,89 @@ class TestParseJunkMethodIsolation:
         assert "/a" in [e["path"] for e in body["endpoints"]]
         assert len(body["skipped"]) == 1
         assert "path" in body["skipped"][0]
+
+
+class _StubGenerator:
+    """Stand-in for the generator, so a failure is deterministic."""
+
+    def __init__(self, fail: bool) -> None:
+        self._fail = fail
+
+    def generate_endpoint(self, endpoint_data):
+        from core.generator import GenerationResult
+
+        path = endpoint_data.get("resource_path", "")
+        if self._fail:
+            return GenerationResult(False, "", path, error="stub failure")
+        return GenerationResult(True, "@app.get('/x')\nasync def x():\n    return {}\n", path)
+
+
+class TestStatsFailures:
+    """The failure count is a statistic, not a view of the log panel.
+
+    It used to be counted from the log buffer, which is bounded and which the
+    dashboard can clear: clearing the logs reported zero failed generations,
+    and failures older than the last 1000 log entries were never counted.
+    """
+
+    def _register_one_endpoint(self, client) -> str:
+        resp = _upload(client, "one.har", _har([
+            _entry("GET", "https://api.example.com/api/x"),
+        ]))
+        assert resp.status_code == 200, resp.text
+        return resp.json()["endpoints"][0]["id"]
+
+    def test_a_failed_generation_is_counted(self, client, monkeypatch):
+        endpoint_id = self._register_one_endpoint(client)
+        monkeypatch.setattr(brain.app_state, "_generator", _StubGenerator(fail=True))
+
+        resp = client.post("/generate", json={"endpoint_id": endpoint_id})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["success"] is False
+
+        stats = client.get("/stats").json()
+        assert stats["failures"] == 1
+        assert stats["generated"] == 0
+        assert stats["pending"] == 1
+
+    def test_clearing_the_logs_keeps_the_count(self, client, monkeypatch):
+        endpoint_id = self._register_one_endpoint(client)
+        monkeypatch.setattr(brain.app_state, "_generator", _StubGenerator(fail=True))
+        client.post("/generate", json={"endpoint_id": endpoint_id})
+
+        assert client.delete("/logs").status_code == 200
+        assert client.get("/stats").json()["failures"] == 1
+
+    def test_a_later_success_clears_the_failure(self, client, monkeypatch):
+        endpoint_id = self._register_one_endpoint(client)
+        monkeypatch.setattr(brain.app_state, "_generator", _StubGenerator(fail=True))
+        client.post("/generate", json={"endpoint_id": endpoint_id})
+        assert client.get("/stats").json()["failures"] == 1
+
+        monkeypatch.setattr(brain.app_state, "_generator", _StubGenerator(fail=False))
+        assert client.post(
+            "/generate", json={"endpoint_id": endpoint_id}
+        ).json()["success"] is True
+
+        stats = client.get("/stats").json()
+        assert stats["failures"] == 0
+        assert stats["generated"] == 1
+
+    def test_uploading_a_new_archive_resets_the_count(self, client, monkeypatch):
+        endpoint_id = self._register_one_endpoint(client)
+        monkeypatch.setattr(brain.app_state, "_generator", _StubGenerator(fail=True))
+        client.post("/generate", json={"endpoint_id": endpoint_id})
+        assert client.get("/stats").json()["failures"] == 1
+
+        self._register_one_endpoint(client)
+        assert client.get("/stats").json()["failures"] == 0
+
+    def test_deleting_the_endpoint_clears_the_failure(self, client, monkeypatch):
+        endpoint_id = self._register_one_endpoint(client)
+        monkeypatch.setattr(brain.app_state, "_generator", _StubGenerator(fail=True))
+        client.post("/generate", json={"endpoint_id": endpoint_id})
+
+        assert client.delete(f"/endpoints/{endpoint_id}").status_code == 200
+        stats = client.get("/stats").json()
+        assert stats["total_endpoints"] == 0
+        assert stats["failures"] == 0
