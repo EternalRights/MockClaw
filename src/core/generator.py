@@ -43,14 +43,6 @@ from collections import defaultdict
 
 app = FastAPI(title='MockClaw Generated API')
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # === Resilience Middleware (Auto-Injected) ===
 
 class PathTraversalMiddleware(BaseHTTPMiddleware):
@@ -85,10 +77,23 @@ class GlobalErrorHandler(BaseHTTPMiddleware):
         except Exception as e:
             return JSONResponse(status_code=500, content={{'error': 'Internal server error', 'code': 'INTERNAL_ERROR'}})
 
-# Apply middleware
+# Apply middleware. Starlette makes the *last* registered middleware the
+# outermost one, so CORS is registered last on purpose: the resilience
+# middleware below can answer before it (400 for a traversal attempt, 429
+# for the rate limit), and a browser cannot read a response that arrives
+# without the CORS headers -- it reports a cross-origin failure instead of
+# the status the mock meant to send. Outermost also keeps preflight OPTIONS
+# from spending the request budget.
 app.add_middleware(GlobalErrorHandler)
 app.add_middleware(RateLimitMiddleware, requests_per_minute=60)
 app.add_middleware(PathTraversalMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/health")
 async def health():

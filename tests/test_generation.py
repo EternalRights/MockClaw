@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from core.parser import HARParser
-from core.generator import MockGenerator, GenerationResult
+from core.generator import MockGenerator, GenerationResult, _get_mock_server_header
 from core.route_builder import build_route, generate_func_name, body_literal, _arg_signature
 from core.code_extractor import CodeExtractor
 from core.generation_strategy import (
@@ -1948,6 +1948,74 @@ class TestNonFiniteFloats:
         resp = _serve(route, "GET", "/v")
         assert resp.status_code == 200, resp.text
         assert resp.text == '{"v": NaN}'
+
+
+class TestGeneratedMiddlewareStack:
+    """The generated server must answer in a form a browser can read.
+
+    Starlette makes the *last* registered middleware the outermost one, so
+    registering CORS first left it innermost -- behind the resilience
+    middleware. Those answer 400/429 before CORS ever runs, and a browser
+    cannot read a response that arrives without the CORS headers: it reports
+    a cross-origin failure instead of the status the mock meant to send.
+    """
+
+    def _app(self):
+        src = _get_mock_server_header() + (
+            '@app.get("/api/users")\n'
+            'async def get_api_users():\n'
+            '    """probe."""\n'
+            '    return {"ok": 1}\n'
+        )
+        namespace: dict = {}
+        exec(compile(src, "<generated>", "exec"), namespace)
+        return namespace["app"]
+
+    def test_cors_is_registered_last_so_it_is_outermost(self):
+        from fastapi.middleware.cors import CORSMiddleware
+
+        app = self._app()
+        assert getattr(app.user_middleware[0], "cls", None) is CORSMiddleware
+
+    def test_rate_limit_response_carries_cors_headers(self):
+        from fastapi.testclient import TestClient
+
+        app = self._app()
+        origin = {"Origin": "http://localhost:3000"}
+        with TestClient(app, raise_server_exceptions=False) as c:
+            last = None
+            for _ in range(70):
+                last = c.get("/api/users", headers=origin)
+                if last.status_code == 429:
+                    break
+            assert last.status_code == 429
+            assert last.headers.get("access-control-allow-origin") == "*"
+
+    def test_traversal_rejection_carries_cors_headers(self):
+        from fastapi.testclient import TestClient
+
+        app = self._app()
+        with TestClient(app, raise_server_exceptions=False) as c:
+            r = c.get("/a/%2e%2e/b", headers={"Origin": "http://localhost:3000"})
+            assert r.status_code == 400
+            assert r.headers.get("access-control-allow-origin") == "*"
+
+    def test_preflight_does_not_spend_the_rate_limit_budget(self):
+        # CORS outermost answers the preflight itself, so it never reaches the
+        # counter; otherwise a browser client burns its budget on preflights.
+        from fastapi.testclient import TestClient
+
+        app = self._app()
+        with TestClient(app, raise_server_exceptions=False) as c:
+            for _ in range(10):
+                c.options("/api/users", headers={
+                    "Origin": "http://x.test",
+                    "Access-Control-Request-Method": "GET",
+                })
+            for i in range(60):
+                resp = c.get("/api/users")
+                assert resp.status_code == 200, f"request {i + 1} refused early"
+            assert c.get("/api/users").status_code == 429
 
 
 class TestGeneratedRouteRuntime:
