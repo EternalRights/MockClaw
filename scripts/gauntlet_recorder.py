@@ -9,8 +9,25 @@ import random
 import requests
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import urlparse, parse_qsl
+
+
+def _raw_header_pairs(response: Any) -> list[tuple[str, str]]:
+    """The response's headers as name/value pairs, one per occurrence.
+
+    The mapping ``requests`` exposes joins a repeated name with a comma, and
+    for Set-Cookie that is lossy past recovery -- an ``Expires`` attribute
+    contains commas, so two cookies cannot be split apart again. The raw
+    header list keeps every occurrence.
+    """
+    raw_headers = getattr(getattr(response, "raw", None), "headers", None)
+    if raw_headers is not None and hasattr(raw_headers, "items"):
+        return [(str(name), str(value)) for name, value in raw_headers.items()]
+    return [
+        (str(name), str(value))
+        for name, value in (getattr(response, "headers", None) or {}).items()
+    ]
 
 
 class GauntletRecorder:
@@ -23,19 +40,56 @@ class GauntletRecorder:
     
     def record_request(self, method: str, url: str, request_data: Any = None, 
                        response_data: Any = None, status_code: int = 200,
-                       error: str | None = None) -> dict[str, Any]:
+                       error: str | None = None,
+                       response_headers: Any = None,
+                       response_text: str | None = None,
+                       response: Any = None) -> dict[str, Any]:
         """Record a single request/response pair.
 
         Extracts query parameters from *url* into the HAR ``queryString``
         field so the downstream parser can detect filtering parameters.
+
+        Pass *response* (a ``requests.Response``) to record what actually came
+        back: its status, its headers and its body as they arrived. Status,
+        headers and content type used to be hardcoded, so a captured redirect
+        lost its Location, a captured login lost its cookies, and a non-JSON
+        body was both described as JSON and re-encoded through ``json.dumps``
+        into a quoted string -- the mock generated from the archive then
+        served something the origin never sent, and nothing said so.
         """
+        if response is not None:
+            status_code = response.status_code
+            response_headers = _raw_header_pairs(response)
+            response_text = response.text
+
         timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
         parsed_url = urlparse(url)
         query_string = [
             {"name": key, "value": value}
             for key, value in parse_qsl(parsed_url.query)
         ]
-        
+
+        pairs: list[tuple[str, str]] = []
+        if response_headers:
+            items = (
+                response_headers.items()
+                if isinstance(response_headers, Mapping)
+                else response_headers
+            )
+            pairs = [(str(name), str(value)) for name, value in items]
+
+        header_entries = [{"name": name, "value": value} for name, value in pairs]
+        content_type = next(
+            (value for name, value in pairs if name.lower() == "content-type"), ""
+        )
+
+        if response_text is not None:
+            body_text = response_text
+        elif response_data is not None:
+            body_text = json.dumps(response_data)
+        else:
+            body_text = json.dumps({"error": error})
+
         entry = {
             "startedDateTime": timestamp,
             "time": random.randint(50, 500),
@@ -56,12 +110,10 @@ class GauntletRecorder:
                 "status": status_code,
                 "statusText": "OK" if status_code == 200 else "Error",
                 "httpVersion": "HTTP/1.1",
-                "headers": [
-                    {"name": "Content-Type", "value": "application/json"}
-                ],
+                "headers": header_entries,
                 "content": {
-                    "mimeType": "application/json",
-                    "text": json.dumps(response_data) if response_data is not None else json.dumps({"error": error})
+                    "mimeType": content_type or "application/json",
+                    "text": body_text
                 },
                 "redirectURL": "",
                 "headersSize": 150,
@@ -91,8 +143,7 @@ class GauntletRecorder:
             resp = self.session.get(f"{self.base_url}/products")
             self.record_request(
                 "GET", f"{self.base_url}/products",
-                response_data=resp.json(),
-                status_code=resp.status_code
+                response=resp,
             )
         except Exception as e:
             print(f"     Warning: {e}")
@@ -103,8 +154,7 @@ class GauntletRecorder:
             resp = self.session.get(f"{self.base_url}/products?category=electronics")
             self.record_request(
                 "GET", f"{self.base_url}/products?category=electronics",
-                response_data=resp.json(),
-                status_code=resp.status_code
+                response=resp,
             )
         except Exception as e:
             print(f"     Warning: {e}")
@@ -117,8 +167,7 @@ class GauntletRecorder:
             self.record_request(
                 "POST", f"{self.base_url}/login",
                 request_data=login_data,
-                response_data=resp.json(),
-                status_code=resp.status_code
+                response=resp,
             )
             token = resp.json().get("token") if resp.status_code == 200 else None
         except Exception as e:
@@ -131,8 +180,7 @@ class GauntletRecorder:
             resp = self.session.get(f"{self.base_url}/cart/user123")
             self.record_request(
                 "GET", f"{self.base_url}/cart/user123",
-                response_data=resp.json(),
-                status_code=resp.status_code
+                response=resp,
             )
         except Exception as e:
             print(f"     Warning: {e}")
@@ -150,8 +198,7 @@ class GauntletRecorder:
                 self.record_request(
                     "POST", f"{self.base_url}/cart/user123",
                     request_data=item,
-                    response_data=resp.json(),
-                    status_code=resp.status_code
+                    response=resp,
                 )
             except Exception as e:
                 print(f"     Warning: {e}")
@@ -162,8 +209,7 @@ class GauntletRecorder:
             resp = self.session.get(f"{self.base_url}/cart/user123")
             self.record_request(
                 "GET", f"{self.base_url}/cart/user123",
-                response_data=resp.json(),
-                status_code=resp.status_code
+                response=resp,
             )
         except Exception as e:
             print(f"     Warning: {e}")
@@ -180,8 +226,7 @@ class GauntletRecorder:
             self.record_request(
                 "POST", f"{self.base_url}/checkout",
                 request_data=checkout_data,
-                response_data=resp.json() if resp.text else {"error": "Checkout failed"},
-                status_code=resp.status_code,  # Should be 400
+                response=resp,  # Should be 400
                 error="COUPON_EXPIRED" if resp.status_code == 400 else None
             )
             print(f"     ✓ Correctly rejected expired coupon (status {resp.status_code})")
@@ -196,8 +241,7 @@ class GauntletRecorder:
             self.record_request(
                 "POST", f"{self.base_url}/checkout",
                 request_data=checkout_data,
-                response_data=resp.json() if resp.text else {"error": "Checkout failed"},
-                status_code=resp.status_code
+                response=resp,
             )
             if resp.status_code == 200:
                 print(f"     ✓ Checkout successful: {resp.json().get('order_id')}")
@@ -210,8 +254,7 @@ class GauntletRecorder:
             resp = self.session.get(f"{self.base_url}/orders/user123")
             self.record_request(
                 "GET", f"{self.base_url}/orders/user123",
-                response_data=resp.json(),
-                status_code=resp.status_code
+                response=resp,
             )
         except Exception as e:
             print(f"     Warning: {e}")
@@ -222,8 +265,7 @@ class GauntletRecorder:
             resp = self.session.get(f"{self.base_url}/health")
             self.record_request(
                 "GET", f"{self.base_url}/health",
-                response_data=resp.json(),
-                status_code=resp.status_code
+                response=resp,
             )
         except Exception as e:
             print(f"     Warning: {e}")
@@ -279,11 +321,13 @@ def main() -> int:
             print("\nPlease start the Dummy Shop first:")
             print("  python tests/gauntlet/dummy_shop.py")
             return 1
-    except requests.exceptions.ConnectionError:
-        print("❌ Cannot connect to Dummy Shop!")
-        print("\nPlease start the Dummy Shop first:")
+    except requests.exceptions.RequestException as e:
+        # RequestException covers the family: a refused connection, a timeout,
+        # and a base_url that is not a URL at all. Catching only
+        # ConnectionError let the rest escape as an unhandled traceback.
+        print(f"❌ Cannot reach the Dummy Shop at {base_url}: {e}")
+        print("\nPlease check the URL and start the Dummy Shop first:")
         print("  python tests/gauntlet/dummy_shop.py")
-        print("\nThen run this script again.")
         return 1
     
     # Record session
