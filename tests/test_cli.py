@@ -431,6 +431,53 @@ class TestStatsCommand:
         data = json.loads(result.stdout)
         assert data["total_endpoints"] == 1
 
+    def test_stats_counts_the_implicit_200_of_a_branch(self, tmp_path):
+        # A 200 branch writes no status: FastAPI's default is what it returns.
+        # Reading only the explicit codes reported an endpoint with one 400
+        # branch and one 200 branch as if it only ever answered 400.
+        (tmp_path / "dynamic_api.py").write_text(
+            '@app.post("/api/checkout")\n'
+            'async def post_api_checkout(request: Request):\n'
+            '    body = await request.json()\n'
+            '    if body.get("coupon_code") == "EXPIRED":\n'
+            '        return JSONResponse(status_code=400, content={"e": 1})\n'
+            '    else:\n'
+            '        return {"order_id": "ORD-1"}\n',
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["stats", str(tmp_path), "--json"])
+        data = json.loads(result.stdout)
+        assert data["endpoints"]["POST /api/checkout"]["status_codes"] == ["400", "200"]
+
+    def test_stats_counts_an_implicit_200_built_without_a_status(self, tmp_path):
+        # The multi-statement replay (a repeated header) assigns the response
+        # first, so the implicit 200 sits on the construction line.
+        (tmp_path / "dynamic_api.py").write_text(
+            '@app.get("/api/ok")\n'
+            'async def get_api_ok():\n'
+            '    _response = JSONResponse(content={"ok": True}, headers={"etag": "v1"})\n'
+            '    return _response\n',
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["stats", str(tmp_path), "--json"])
+        data = json.loads(result.stdout)
+        assert data["endpoints"]["GET /api/ok"]["status_codes"] == ["200"]
+
+    def test_stats_does_not_double_count_a_returned_response_variable(self, tmp_path):
+        # return _response must not read as a second, implicit 200 next to the
+        # explicit 302 on the construction line.
+        (tmp_path / "dynamic_api.py").write_text(
+            '@app.get("/api/old")\n'
+            'async def get_api_old():\n'
+            '    _response = JSONResponse(status_code=302, content={"to": "/new"})\n'
+            '    _response.headers.append("set-cookie", "b=2")\n'
+            '    return _response\n',
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["stats", str(tmp_path), "--json"])
+        data = json.loads(result.stdout)
+        assert data["endpoints"]["GET /api/old"]["status_codes"] == ["302"]
+
     def test_stats_detects_smart_routing(self, tmp_path):
         mock_file = tmp_path / "dynamic_api.py"
         mock_file.write_text(

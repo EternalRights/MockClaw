@@ -673,6 +673,16 @@ def stats(
     # lookbehind keeps this from also matching the JSONResponse form and
     # double-counting every JSON status.
     response_status_pat = re.compile(r"(?<![A-Za-z_])Response\(status_code=(\d+)")
+    # A branch that answers 200 writes no status at all -- FastAPI's default is
+    # what it returns -- so counting only the explicit codes reported a
+    # multi-branch endpoint as if it only ever answered its error status: the
+    # gauntlet's POST /checkout, one 400 branch and two 200 ones, came out as
+    # ["400"]. A response built without status_code= and a returned literal
+    # that is not the response variable are both that implicit 200.
+    default_status_pat = re.compile(
+        r"(?<![A-Za-z_])(?:JSONResponse|Response)\(content="
+        r"|\breturn (?!_response\b)(?!(?:JSONResponse|Response)\()"
+    )
     latency_pat = re.compile(r"await asyncio\.sleep\(([\d.]+)\)")
 
     def _status_label(raw: str) -> str:
@@ -720,11 +730,9 @@ def stats(
             + list(json_status_pat.finditer(block))
             + list(response_status_pat.finditer(block))
         )
-        statuses = [
-            _status_label(m.group(1))
-            for m in sorted(found, key=lambda m: m.start())
-        ]
-        ep["status_codes"] = statuses or ["200"]
+        marked = [(m.start(), _status_label(m.group(1))) for m in found]
+        marked += [(m.start(), "200") for m in default_status_pat.finditer(block)]
+        ep["status_codes"] = [status for _, status in sorted(marked)] or ["200"]
 
         latency_matches = latency_pat.findall(block)
         if latency_matches:
