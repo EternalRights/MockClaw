@@ -7,7 +7,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qsl, unquote, urlparse
 
 import json
 
@@ -227,9 +227,17 @@ class HARParser:
         request = _as_mapping(entry.get('request'))
         url = _to_str(request.get('url'))
 
-        query_params = request.get('queryString') or []
-        query_dict = {}
-        for p in query_params:
+        # The URL is what the client actually asked for, and it carries the
+        # query on its own. queryString is a convenience: browsers fill it in,
+        # but hand-written and some non-browser HARs leave it empty, and a
+        # capture of /products?category=books then produced a mock with no
+        # query parameters at all -- every variant was answered with the first
+        # recorded response. Start from the URL; queryString overrides it.
+        query_dict: dict[str, str] = {}
+        for name, value in parse_qsl(urlparse(url).query, keep_blank_values=True):
+            query_dict[name] = value
+
+        for p in request.get('queryString') or []:
             p = _as_mapping(p)
             name = p.get('name')
             if name:

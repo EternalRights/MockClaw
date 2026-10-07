@@ -1385,6 +1385,81 @@ class TestRecordedStatusReplay:
             assert resp.json() == {"id": 7}
 
 
+class TestQueryStringFromUrl:
+    """The URL carries the query on its own; queryString may be absent.
+
+    Browsers fill queryString in, but hand-written and some non-browser HARs
+    leave it empty -- and reading only that field produced a mock with no
+    query parameters at all, so every variant of the URL was answered with
+    the first recorded response.
+    """
+
+    def _entry(self, url, body, query_string=None):
+        return {
+            "request": {"method": "GET", "url": url, "headers": [],
+                        "queryString": query_string or []},
+            "response": {"status": 200, "headers": [],
+                         "content": {"mimeType": "application/json", "text": body}},
+            "time": 10,
+        }
+
+    def _endpoint(self, tmp_path, entries):
+        f = tmp_path / "t.har"
+        f.write_text(json.dumps({"log": {"version": "1.2", "entries": entries}}),
+                     encoding="utf-8")
+        return HARParser(str(f)).export_as_dict()["endpoints"][0]
+
+    def test_query_only_in_the_url_is_picked_up(self, tmp_path):
+        endpoint = self._endpoint(tmp_path, [
+            self._entry("https://api.example.com/products?category=books", '{"c": 1}'),
+        ])
+        assert endpoint["sample_request"]["query_params"] == {"category": "books"}
+
+    def test_two_url_variants_route_to_their_own_response(self, tmp_path):
+        endpoint = self._endpoint(tmp_path, [
+            self._entry("https://api.example.com/products?category=electronics", '{"c": "e"}'),
+            self._entry("https://api.example.com/products?category=books", '{"c": "b"}'),
+        ])
+        route = MockGenerator(use_smart_fallback=True).generate_endpoint(endpoint).generated_code
+
+        assert _serve(route, "GET", "/products", params={"category": "electronics"}).json() == {"c": "e"}
+        assert _serve(route, "GET", "/products", params={"category": "books"}).json() == {"c": "b"}
+
+    def test_query_string_wins_when_both_describe_the_same_key(self, tmp_path):
+        endpoint = self._endpoint(tmp_path, [
+            self._entry("https://api.example.com/s?status=from-url", '{"s": 1}',
+                        query_string=[{"name": "status", "value": "from-field"}]),
+        ])
+        assert endpoint["sample_request"]["query_params"] == {"status": "from-field"}
+
+    def test_url_parameters_missing_from_query_string_are_added(self, tmp_path):
+        endpoint = self._endpoint(tmp_path, [
+            self._entry("https://api.example.com/s?a=1&b=2", '{"s": 1}',
+                        query_string=[{"name": "a", "value": "1"}]),
+        ])
+        assert endpoint["sample_request"]["query_params"] == {"a": "1", "b": "2"}
+
+    def test_encoded_query_values_arrive_decoded(self, tmp_path):
+        # The route compares against what the server hands over, and Starlette
+        # decodes a query value before the handler sees it.
+        endpoint = self._endpoint(tmp_path, [
+            self._entry("https://api.example.com/s?q=%E4%B8%AD", '{"s": 1}'),
+        ])
+        assert endpoint["sample_request"]["query_params"] == {"q": "中"}
+
+    def test_a_blank_value_is_kept(self, tmp_path):
+        endpoint = self._endpoint(tmp_path, [
+            self._entry("https://api.example.com/s?flag=", '{"s": 1}'),
+        ])
+        assert endpoint["sample_request"]["query_params"] == {"flag": ""}
+
+    def test_no_query_leaves_the_parameters_empty(self, tmp_path):
+        endpoint = self._endpoint(tmp_path, [
+            self._entry("https://api.example.com/plain", '{"s": 1}'),
+        ])
+        assert endpoint["sample_request"]["query_params"] == {}
+
+
 class TestQueryRouteGeneration:
     """Query-param routes must survive hostile param names and values."""
 
