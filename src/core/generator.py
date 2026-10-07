@@ -113,6 +113,17 @@ def _get_mock_server_header() -> str:
     return _MOCK_SERVER_HEADER_TPL.format(indent=_INDENT, version=_VERSION)
 
 
+def _comment_text(value: Any) -> str:
+    """Flatten recorded text so it cannot end a generated comment.
+
+    A path carrying a line break would end the ``# METHOD /path`` comment and
+    leave the rest of it as a bare statement at module level -- a NameError
+    when the mock is imported.
+    """
+    text = "" if value is None else str(value)
+    return text.replace("\r", " ").replace("\n", " ")
+
+
 class GenerationResult:
     """Result of mock generation."""
 
@@ -295,7 +306,7 @@ class MockGenerator:
             result = self.generate_endpoint(endpoint)
             results.append(result)
             if result.success:
-                parts.append(f"# {endpoint['method']} {endpoint['resource_path']}")
+                parts.append(f"# {_comment_text(endpoint['method'])} {_comment_text(endpoint['resource_path'])}")
                 parts.append(result.generated_code)
                 parts.append("")
             else:

@@ -296,10 +296,19 @@ def _route_decorator(method: str, path: str) -> str:
     """Build the decorator line that registers *path* under *method*.
 
     Falls back to ``api_route`` for methods FastAPI has no shorthand for.
+
+    The path is a recorded value, not source. A capture whose URL carried
+    ``%22`` decodes to a quote, and interpolating it raw produced
+    ``@app.get("/api/a"b")`` -- an unterminated string literal that took the
+    whole generated module down. A backslash was quieter and worse: ``\\b``
+    is the backspace escape, so the decorator compiled and the route then
+    matched nothing.
     """
+    path_literal = json.dumps(path, ensure_ascii=False)
     if method in _APP_VERBS:
-        return f'@app.{method.lower()}("{path}")'
-    return f'@app.api_route("{path}", methods=["{method}"])'
+        return f'@app.{method.lower()}({path_literal})'
+    method_literal = json.dumps(method, ensure_ascii=False)
+    return f'@app.api_route({path_literal}, methods=[{method_literal}])'
 
 
 _PATH_PARAM_RE = re.compile(r"\{([^{}:/]+)\}")
@@ -626,9 +635,12 @@ def _generate_smart_route(
     for req_data, status, _resp_data, resp_body, resp_ct, resp_headers, resp_pairs in distinct:
         checks = [
             (
-                f'body.get("{field}") == {_py_literal(req_data[field])}'
+                # The key comes from a recorded request body, so it is data,
+                # not source: a key holding a quote produced
+                # `body.get("a"b")` and the module would not parse.
+                f'body.get({json.dumps(field, ensure_ascii=False)}) == {_py_literal(req_data[field])}'
                 if field in req_data
-                else f'body.get("{field}") is None'
+                else f'body.get({json.dumps(field, ensure_ascii=False)}) is None'
             )
             for field in fields
         ]

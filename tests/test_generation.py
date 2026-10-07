@@ -2284,6 +2284,90 @@ class TestBuiltinRouteSkip:
         assert "captured" not in src
 
 
+class TestRecordedTextIsNotSource:
+    """Recorded bytes reach the generated file as data, never as code.
+
+    A capture whose URL carried %22 decodes to a quote, and the decorator came
+    out as ``@app.get("/api/a"b")`` -- an unterminated literal took the whole
+    module down. A backslash was quieter and worse: ``\\b`` is the backspace
+    escape, so the route compiled and then matched nothing. A request-body key
+    holding a quote broke a smart-route condition the same way, and a path
+    with a line break ended the ``# METHOD path`` comment and left the rest as
+    a bare statement at module level.
+    """
+
+    def _entry(self, url, method="GET", body='{"ok": 1}', post=None):
+        request = {"method": method, "url": url, "headers": [], "queryString": []}
+        if post is not None:
+            request["postData"] = {"mimeType": "application/json", "text": post}
+        return {
+            "request": request,
+            "response": {"status": 200, "headers": [],
+                         "content": {"mimeType": "application/json", "text": body}},
+            "time": 10,
+        }
+
+    def _endpoint(self, tmp_path, entries):
+        f = tmp_path / "t.har"
+        f.write_text(json.dumps({"log": {"version": "1.2", "entries": entries}}),
+                     encoding="utf-8")
+        return HARParser(str(f)).export_as_dict()["endpoints"][0]
+
+    @pytest.mark.parametrize("url, expected_path", [
+        ("https://api.example.com/api/a%22b", "/api/a\"b"),
+        ("https://api.example.com/api/a%5Cb", "/api/a\\b"),
+        ("https://api.example.com/api/a%0Ab", "/api/a\nb"),
+        ("https://api.example.com/api/a%09b", "/api/a\tb"),
+    ])
+    def test_the_recorded_path_survives_as_a_string(self, tmp_path, url, expected_path):
+        endpoint = self._endpoint(tmp_path, [self._entry(url)])
+        route = MockGenerator(use_smart_fallback=False).generate_endpoint(
+            endpoint
+        ).generated_code
+
+        app, _ = _exec_route(route)
+        assert [r.path for r in app.routes if r.path.startswith("/api/")] == [expected_path]
+
+    def test_a_normal_path_is_emitted_exactly_as_before(self, tmp_path):
+        endpoint = self._endpoint(tmp_path, [
+            self._entry("https://api.example.com/api/users/1"),
+        ])
+        route = MockGenerator(use_smart_fallback=False).generate_endpoint(
+            endpoint
+        ).generated_code
+        assert '@app.get("/api/users/{id}")' in route
+
+    def test_a_line_break_in_the_path_does_not_end_the_comment(self, tmp_path):
+        endpoint = self._endpoint(tmp_path, [
+            self._entry("https://api.example.com/api/a%0Ab"),
+        ])
+        out = tmp_path / "mocks"
+        MockGenerator(use_smart_fallback=False).generate_all([endpoint], str(out))
+        source = (out / "dynamic_api.py").read_text(encoding="utf-8")
+
+        # Importing the whole module is the check: an unflattened comment left
+        # the remainder of the path as a bare statement at module level.
+        namespace: dict = {}
+        exec(compile(source, "<generated>", "exec"), namespace)
+        assert "app" in namespace
+
+    def test_a_quote_in_a_body_key_does_not_break_the_smart_route(self, tmp_path):
+        weird = json.dumps({'a"b': 1})
+        endpoint = self._endpoint(tmp_path, [
+            self._entry("https://api.example.com/api/r", "POST", '{"x": 1}', post=weird),
+            self._entry("https://api.example.com/api/r", "POST", '{"x": 2}',
+                        post=json.dumps({'a"b': 2})),
+        ])
+        route = MockGenerator(use_smart_fallback=True).generate_endpoint(
+            endpoint
+        ).generated_code
+
+        assert 'body.get("a\\"b")' in route
+        resp = _serve(route, "POST", "/api/r", json={'a"b': 2})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"x": 2}
+
+
 class TestGeneratedRouteRuntime:
     """Generated routes must run, not merely compile."""
 
