@@ -85,6 +85,41 @@ class TestFenceInfoString:
         assert extractor.extract_code(text) == CODE
 
 
+class TestIndentedFence:
+    """A model may indent its whole fence; the snippet is still the code.
+
+    Models do this when the reply is written as a list item or under a
+    sub-heading. The indent made the block fail to compile, so the answer was
+    rejected as unusable and the endpoint fell back to the plain template --
+    the model's work discarded for a formatting accident.
+    """
+
+    @staticmethod
+    def _indented(tag="python", indent="  "):
+        body = "\n".join(indent + line for line in CODE.splitlines())
+        opening = f"{indent}```{tag}" if tag else f"{indent}```"
+        return f"Here it is:\n{opening}\n{body}\n{indent}```\n"
+
+    @pytest.mark.parametrize("tag", ["python", "", "py", "python3"])
+    def test_the_common_indent_is_removed(self, extractor, tag):
+        assert extractor.extract_code(self._indented(tag)) == CODE
+
+    def test_the_extracted_code_compiles_and_registers_a_route(self, extractor):
+        code = extractor.extract_code(self._indented())
+
+        compile(code, "<extracted>", "exec")
+        assert defines_route(code)
+
+    def test_a_four_space_indent_is_removed_too(self, extractor):
+        assert extractor.extract_code(self._indented(indent="    ")) == CODE
+
+    def test_no_common_indent_is_left_alone(self, extractor):
+        # Only the indentation every line shares is removed, so a block laid
+        # out differently is untouched.
+        ragged = '@app.get("/api/x")\n    async def get_api_x():\n        return {"ok": True}'
+        assert extractor.extract_code(f"```python\n{ragged}\n```") == ragged
+
+
 class TestDefinesRoute:
     def test_route_decorators(self):
         for decorator in [

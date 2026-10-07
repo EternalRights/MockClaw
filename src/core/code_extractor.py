@@ -6,6 +6,7 @@ Extracts Python code blocks from LLM responses.
 from __future__ import annotations
 
 import re
+import textwrap
 
 
 # A fence line is ```<info string>: the language tag, usually, but models also
@@ -54,6 +55,21 @@ def _is_info_string(text: str) -> bool:
 def defines_route(code: str) -> bool:
     """Whether *code* registers a FastAPI route."""
     return any(marker.search(code) for marker in _ROUTE_MARKERS)
+
+
+def _code_body(text: str) -> str:
+    """Whitespace-normalise an extracted fenced block.
+
+    A model that indents the whole fence -- which it does when the reply is
+    written as a list item or under a sub-heading -- left an indent on every
+    line of the snippet. That does not compile ("unexpected indent"), so the
+    answer was rejected as unusable and the endpoint fell back to the plain
+    template, throwing the model's work away for a purely cosmetic reason.
+
+    Only the indentation common to every line is removed, so a block that is
+    deliberately laid out differently stays as it was.
+    """
+    return textwrap.dedent(text).strip()
 
 
 class CodeExtractor:
@@ -118,5 +134,5 @@ class CodeExtractor:
             # A single-line fence carries its content on the fence line.
             return info.strip()
         if info.strip() and _is_info_string(info):
-            return body.strip()
-        return f"{info}\n{body}".strip()
+            return _code_body(body)
+        return _code_body(f"{info}\n{body}")
