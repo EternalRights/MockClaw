@@ -343,11 +343,18 @@ async def generate_mock(request: GenerateRequest):
     endpoint = app_state.endpoints[endpoint_id]
 
     if endpoint.get("generated"):
+        # Same keys as a fresh generation. This used to answer with only
+        # {success, endpoint_id, cached, message}, so a client that read
+        # generated_code or logs after a second click got nothing -- even
+        # though the code is right there on the endpoint it kept.
         return {
             "success": True,
             "endpoint_id": endpoint_id,
             "cached": True,
-            "message": "Endpoint already generated"
+            "message": "Endpoint already generated",
+            "generated_code": endpoint.get("generated_code"),
+            "logs": app_state.get_recent_logs(5),
+            "error": None,
         }
 
     _add_log("info", f"Starting generation for {endpoint['method']} {endpoint['resource_path']}")

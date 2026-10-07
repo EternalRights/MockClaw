@@ -227,6 +227,44 @@ class TestParseJunkMethodIsolation:
         assert "path" in body["skipped"][0]
 
 
+class TestGenerateResponseShape:
+    """One endpoint, one response shape.
+
+    A second /generate used to answer with only success/endpoint_id/cached/
+    message, so a client that read generated_code or logs after a cache hit
+    got nothing -- although the code is stored on the endpoint it kept.
+    """
+
+    def _generate_twice(self, client):
+        resp = _upload(client, "one.har", _har([
+            _entry("GET", "https://api.example.com/api/x"),
+        ]))
+        endpoint_id = resp.json()["endpoints"][0]["id"]
+
+        first = client.post("/generate", json={"endpoint_id": endpoint_id}).json()
+        second = client.post("/generate", json={"endpoint_id": endpoint_id}).json()
+        return first, second
+
+    def test_a_cache_hit_has_every_key_a_fresh_one_has(self, client):
+        first, second = self._generate_twice(client)
+
+        assert first["cached"] is False
+        assert second["cached"] is True
+        assert set(first) <= set(second), sorted(set(first) - set(second))
+
+    def test_a_cache_hit_carries_the_same_code(self, client):
+        first, second = self._generate_twice(client)
+
+        assert first["generated_code"]
+        assert second["generated_code"] == first["generated_code"]
+
+    def test_a_cache_hit_still_reports_logs_and_no_error(self, client):
+        _, second = self._generate_twice(client)
+
+        assert second["logs"]
+        assert second["error"] is None
+
+
 class _StubGenerator:
     """Stand-in for the generator, so a failure is deterministic."""
 
