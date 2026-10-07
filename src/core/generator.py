@@ -154,7 +154,11 @@ class MockGenerator:
             handlers to mimic the original response time recorded in the HAR.
     """
 
-    _BUILTIN_PATHS = {"/health", "/mockclaw/info"}
+    # The header registers these as GET routes (see _MOCK_SERVER_HEADER_TPL).
+    # The method belongs to the identity: a capture of POST /health is a
+    # different endpoint, and skipping on the path alone dropped it -- the
+    # mock then answered 405 to a request whose recording said 200.
+    _BUILTIN_ROUTES = {("GET", "/health"), ("GET", "/mockclaw/info")}
 
     def __init__(
         self,
@@ -280,7 +284,11 @@ class MockGenerator:
 
         skipped_count = 0
         for endpoint in endpoints:
-            if endpoint.get("resource_path") in self._BUILTIN_PATHS:
+            route_key = (
+                (endpoint.get("method") or "").upper(),
+                endpoint.get("resource_path"),
+            )
+            if route_key in self._BUILTIN_ROUTES:
                 skipped_count += 1
                 continue
 

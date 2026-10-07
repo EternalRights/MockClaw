@@ -2219,6 +2219,71 @@ class TestRepeatedResponseHeaders:
         assert resp.headers.get_list("set-cookie") == ["sid=1", "csrf=2"]
 
 
+class TestBuiltinRouteSkip:
+    """Only the builtin's own method is taken; the path is not enough.
+
+    The generated header registers /health and /mockclaw/info as GET routes.
+    Skipping by path alone silently dropped a capture of POST /health, and the
+    mock then answered 405 to a request whose recording said 200.
+    """
+
+    def _entry(self, method, url, body='{"ok": 1}'):
+        return {
+            "request": {"method": method, "url": url, "headers": [], "queryString": []},
+            "response": {"status": 200, "headers": [],
+                         "content": {"mimeType": "application/json", "text": body}},
+            "time": 10,
+        }
+
+    def _generate(self, tmp_path, entries):
+        f = tmp_path / "t.har"
+        f.write_text(json.dumps({"log": {"version": "1.2", "entries": entries}}),
+                     encoding="utf-8")
+        data = HARParser(str(f)).export_as_dict()
+        out = tmp_path / "mocks"
+        MockGenerator(use_smart_fallback=False).generate_all(data["endpoints"], str(out))
+        return (out / "dynamic_api.py").read_text(encoding="utf-8")
+
+    def test_the_builtin_get_health_is_kept_once(self, tmp_path):
+        src = self._generate(tmp_path, [
+            self._entry("GET", "https://api.example.com/health", '{"captured": true}'),
+        ])
+        assert src.count('@app.get("/health")') == 1
+        assert "captured" not in src
+
+    def test_a_captured_post_health_is_still_mocked(self, tmp_path):
+        src = self._generate(tmp_path, [
+            self._entry("POST", "https://api.example.com/health", '{"probe": "post"}'),
+        ])
+        assert '@app.post("/health")' in src
+        assert '{"probe": "post"}' in src
+
+    def test_both_methods_of_the_same_builtin_path_coexist(self, tmp_path):
+        src = self._generate(tmp_path, [
+            self._entry("GET", "https://api.example.com/health", '{"captured": true}'),
+            self._entry("POST", "https://api.example.com/health", '{"probe": "post"}'),
+        ])
+        assert src.count('@app.get("/health")') == 1      # the builtin, not the capture
+        assert src.count('@app.post("/health")') == 1
+        assert '{"probe": "post"}' in src
+
+    def test_mockclaw_info_follows_the_same_rule(self, tmp_path):
+        src = self._generate(tmp_path, [
+            self._entry("GET", "https://api.example.com/mockclaw/info", '{"captured": true}'),
+            self._entry("POST", "https://api.example.com/mockclaw/info", '{"probe": "post"}'),
+        ])
+        assert src.count('@app.get("/mockclaw/info")') == 1
+        assert src.count('@app.post("/mockclaw/info")') == 1
+        assert '{"probe": "post"}' in src
+
+    def test_a_lowercase_method_still_matches_the_builtin(self, tmp_path):
+        # The parser normalises, but generate_all also takes hand-built data.
+        src = self._generate(tmp_path, [
+            self._entry("get", "https://api.example.com/health", '{"captured": true}'),
+        ])
+        assert "captured" not in src
+
+
 class TestGeneratedRouteRuntime:
     """Generated routes must run, not merely compile."""
 
