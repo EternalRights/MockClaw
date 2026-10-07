@@ -473,9 +473,13 @@ async def generate_all_endpoints():
     logger.info(f"Batch generation complete: {successful}/{len(pending)}")
 
     return {
-        "success": True,
+        # A batch that generated nothing is not a success. This used to answer
+        # True unconditionally, so a client that checked the flag called a
+        # total failure a success -- while /generate, for its one endpoint,
+        # reported the outcome honestly.
+        "success": successful == len(pending),
         "generated_count": successful,
-        "total_attempted": len(pending)
+        "total_attempted": len(pending),
     }
 
 

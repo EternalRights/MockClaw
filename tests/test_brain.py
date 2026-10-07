@@ -265,6 +265,53 @@ class TestGenerateResponseShape:
         assert second["error"] is None
 
 
+class TestGenerateAllOutcome:
+    """A batch that generated nothing must not report success.
+
+    /generate reports the outcome of its one generation; /generate-all
+    answered True unconditionally, so a client that checked the flag called a
+    total failure a success.
+    """
+
+    def _three_endpoints(self, client):
+        resp = _upload(client, "three.har", _har([
+            _entry("GET", "https://api.example.com/api/a"),
+            _entry("GET", "https://api.example.com/api/b"),
+            _entry("GET", "https://api.example.com/api/c"),
+        ]))
+        assert resp.status_code == 200, resp.text
+        return [e["id"] for e in resp.json()["endpoints"]]
+
+    def test_a_batch_that_generated_nothing_fails(self, client, monkeypatch):
+        self._three_endpoints(client)
+        monkeypatch.setattr(brain.app_state, "_generator", _StubGenerator(fail=True))
+
+        result = client.post("/generate-all").json()
+
+        assert result["success"] is False
+        assert result["generated_count"] == 0
+        assert result["total_attempted"] == 3
+
+    def test_a_batch_that_generated_everything_succeeds(self, client, monkeypatch):
+        self._three_endpoints(client)
+        monkeypatch.setattr(brain.app_state, "_generator", _StubGenerator(fail=False))
+
+        result = client.post("/generate-all").json()
+
+        assert result["success"] is True
+        assert result["generated_count"] == 3
+        assert result["total_attempted"] == 3
+
+    def test_an_empty_batch_is_still_success(self, client):
+        resp = _upload(client, "empty.har", _har([]))
+        assert resp.status_code == 200, resp.text
+
+        result = client.post("/generate-all").json()
+
+        assert result["success"] is True
+        assert result["total_attempted"] == 0
+
+
 class _StubGenerator:
     """Stand-in for the generator, so a failure is deterministic."""
 
