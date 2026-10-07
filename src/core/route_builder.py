@@ -122,7 +122,31 @@ def _header_text(value: Any) -> str:
     return value if isinstance(value, str) else str(value)
 
 
-def _replayable_headers(headers: dict[str, Any] | None) -> dict[str, str]:
+def _header_items(headers: Any, header_pairs: Any = None) -> list[tuple[str, str]]:
+    """The recorded response headers to consider, in order.
+
+    The parser keeps an ordered pair list because a name may legitimately
+    repeat -- Set-Cookie does, and the dict it also exposes kept only the last
+    one. The dict is still accepted for hand-built responses and older
+    callers.
+    """
+    if isinstance(header_pairs, (list, tuple)) and header_pairs:
+        items = []
+        for pair in header_pairs:
+            if isinstance(pair, (list, tuple)) and len(pair) == 2:
+                items.append((_header_text(pair[0]), _header_text(pair[1])))
+        return items
+    if isinstance(headers, dict):
+        return [
+            (_header_text(name), _header_text(value))
+            for name, value in headers.items()
+        ]
+    return []
+
+
+def _replayable_header_pairs(
+    headers: Any, header_pairs: Any = None
+) -> list[tuple[str, str]]:
     """Filter recorded response headers down to the ones worth replaying.
 
     Captured headers used to be dropped wholesale, so a mocked 302 carried no
@@ -133,19 +157,16 @@ def _replayable_headers(headers: dict[str, Any] | None) -> dict[str, str]:
     CR/LF or NUL -- those either make Starlette reject the response or let a
     captured header smuggle a second one into the wire format.
     """
-    if not headers:
-        return {}
-    replayable: dict[str, str] = {}
-    for name, value in headers.items():
-        key = _header_text(name).strip().lower()
+    replayable: list[tuple[str, str]] = []
+    for name, value in _header_items(headers, header_pairs):
+        key = name.strip().lower()
         if not key or key in _MANAGED_RESPONSE_HEADERS:
             continue
         if not _HEADER_NAME_RE.match(key):
             continue
-        text = _header_text(value)
-        if any(ch in text for ch in "\r\n\x00"):
+        if any(ch in value for ch in "\r\n\x00"):
             continue
-        replayable[key] = text
+        replayable.append((key, value))
     return replayable
 
 
@@ -153,7 +174,8 @@ def _replay_line(
     status: int,
     body_text: str,
     content_type: str | None = None,
-    headers: dict[str, Any] | None = None,
+    headers: Any = None,
+    header_pairs: Any = None,
     indent: str = _FB,
 ) -> str:
     """Build the statement that replays one recorded response.
@@ -177,9 +199,23 @@ def _replay_line(
     Replayable headers (``Location``, ``Set-Cookie``, ``ETag``, ...) are
     attached only when present, so an endpoint whose HAR carried none of them
     keeps emitting exactly the code it did before.
+
+    A header name that repeats is the one case that needs more than one
+    statement: ``Response(headers=...)`` takes a mapping, and Starlette
+    rejects a mapping whose value is a list. A login that set a session
+    cookie and a csrf cookie therefore replayed one of them, so the response
+    is built first and the further values appended.
     """
-    hdrs = _replayable_headers(headers)
-    header_arg = f", headers={_py_literal(hdrs)}" if hdrs else ""
+    pairs = _replayable_header_pairs(headers, header_pairs)
+    unique: dict[str, str] = {}
+    repeats: list[tuple[str, str]] = []
+    for name, value in pairs:
+        if name in unique:
+            repeats.append((name, value))
+        else:
+            unique[name] = value
+
+    header_arg = f", headers={_py_literal(unique)}" if unique else ""
 
     if not _is_json_content_type(content_type) or _has_non_finite_constant(body_text):
         media = content_type or "text/plain"
@@ -190,13 +226,38 @@ def _replay_line(
             args.append(f"status_code={status}")
         args.append(f"content={json.dumps(body_text, ensure_ascii=False)}")
         args.append(f"media_type={json.dumps(media, ensure_ascii=False)}")
-        return f"{indent}return Response({', '.join(args)}{header_arg})"
+        return _response_statements(
+            f"Response({', '.join(args)}{header_arg})", repeats, indent
+        )
 
     body_expr = body_literal(body_text)
-    if status == 200 and not hdrs:
+    if status == 200 and not unique and not repeats:
         return f"{indent}return {body_expr}"
     status_arg = f"status_code={status}, " if status != 200 else ""
-    return f"{indent}return JSONResponse({status_arg}content={body_expr}{header_arg})"
+    return _response_statements(
+        f"JSONResponse({status_arg}content={body_expr}{header_arg})", repeats, indent
+    )
+
+
+def _response_statements(
+    construction: str, repeats: list[tuple[str, str]], indent: str
+) -> str:
+    """A return statement, plus an append per repeated header value.
+
+    ``_response`` rather than ``response`` so the name cannot collide with a
+    query parameter of the same spelling.
+    """
+    if not repeats:
+        return f"{indent}return {construction}"
+
+    lines = [f"{indent}_response = {construction}"]
+    for name, value in repeats:
+        lines.append(
+            f"{indent}_response.headers.append("
+            f"{json.dumps(name)}, {json.dumps(value, ensure_ascii=False)})"
+        )
+    lines.append(f"{indent}return _response")
+    return "\n".join(lines)
 
 
 def _docstring_safe(text: str) -> str:
@@ -379,6 +440,7 @@ def build_route(
         first_resp.get("body") or "",
         first_resp.get("content_type"),
         first_resp.get("headers"),
+        header_pairs=first_resp.get("header_pairs"),
     )
 
     # Path placeholders and recorded query keys become typed handler
@@ -521,6 +583,7 @@ def _generate_smart_route(
                     parsed_requests.append((
                         req_data, resp_status, resp_data,
                         raw_body, resp.get("content_type"), resp.get("headers"),
+                        resp.get("header_pairs"),
                     ))
             except (json.JSONDecodeError, TypeError):
                 continue
@@ -560,7 +623,7 @@ def _generate_smart_route(
 
     emitted: set[str] = set()
     first = True
-    for req_data, status, _resp_data, resp_body, resp_ct, resp_headers in distinct:
+    for req_data, status, _resp_data, resp_body, resp_ct, resp_headers, resp_pairs in distinct:
         checks = [
             (
                 f'body.get("{field}") == {_py_literal(req_data[field])}'
@@ -578,7 +641,10 @@ def _generate_smart_route(
         first = False
         lines.append(f"{_FB}{keyword} {condition}:")
 
-        lines.append(_replay_line(status, resp_body, resp_ct, resp_headers, _FB * 2))
+        lines.append(_replay_line(
+            status, resp_body, resp_ct, resp_headers,
+            header_pairs=resp_pairs, indent=_FB * 2,
+        ))
 
     default_response = next(
         (resp for resp in all_responses if 200 <= (resp.get("status") or 200) < 300),
@@ -592,7 +658,8 @@ def _generate_smart_route(
         default_resp,
         default_response.get("content_type"),
         default_response.get("headers"),
-        _FB * 2,
+        header_pairs=default_response.get("header_pairs"),
+        indent=_FB * 2,
     ))
 
     return "\n".join(lines) + "\n"
@@ -668,6 +735,7 @@ def _generate_query_route(
                 resp.get("body") or "{}",
                 resp.get("content_type"),
                 resp.get("headers"),
+                resp.get("header_pairs"),
             ))
 
     distinct = _dedupe_requests(distinct)
@@ -710,7 +778,7 @@ def _generate_query_route(
     if fields:
         emitted: set[str] = set()
         first = True
-        for qp, status_, resp_body, resp_ct, resp_headers in distinct:
+        for qp, status_, resp_body, resp_ct, resp_headers, resp_pairs in distinct:
             checks = [
                 f'{_safe_param_name(field)} == {_py_literal(qp[field])}'
                 for field in fields
@@ -727,7 +795,10 @@ def _generate_query_route(
             first = False
             lines.append(f"{_FB}{keyword} {condition}:")
 
-            lines.append(_replay_line(status_, resp_body, resp_ct, resp_headers, _FB * 2))
+            lines.append(_replay_line(
+                status_, resp_body, resp_ct, resp_headers,
+                header_pairs=resp_pairs, indent=_FB * 2,
+            ))
 
         default_response = next(
             (resp for resp in all_responses if 200 <= (resp.get("status") or 200) < 300),
@@ -740,7 +811,8 @@ def _generate_query_route(
             default_response.get("body") or "{}",
             default_response.get("content_type"),
             default_response.get("headers"),
-            _FB * 2,
+            header_pairs=default_response.get("header_pairs"),
+            indent=_FB * 2,
         ))
     else:
         sc0 = all_responses[0].get("status") or 200
@@ -749,6 +821,7 @@ def _generate_query_route(
             all_responses[0].get("body") or "{}",
             all_responses[0].get("content_type"),
             all_responses[0].get("headers"),
+            header_pairs=all_responses[0].get("header_pairs"),
         ))
 
     return "\n".join(lines) + "\n"

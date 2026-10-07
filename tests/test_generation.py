@@ -2093,6 +2093,132 @@ class TestGeneratedMiddlewareStack:
             assert c.get("/api/users").status_code == 429
 
 
+class TestRepeatedResponseHeaders:
+    """A header name may appear more than once, and both values must survive.
+
+    Set-Cookie is the case that matters: a login that sets a session cookie
+    and a csrf cookie. Collapsing the HAR's header list into a dict kept only
+    the last one, so the mock set one of the two. Starlette's
+    ``Response(headers=...)`` takes a mapping and rejects a list value, so the
+    response has to be built and the further values appended.
+    """
+
+    def _resp(self, headers, status=200, body='{"ok": 1}', content_type="application/json"):
+        return {"status": status, "body": body, "content_type": content_type,
+                "headers": dict(headers), "header_pairs": [list(p) for p in headers]}
+
+    def test_every_value_of_a_repeated_header_is_replayed(self):
+        route = build_route(
+            "GET", "/login",
+            [self._resp([
+                ("set-cookie", "sid=abc; Path=/"),
+                ("set-cookie", "csrf=zzz; Path=/"),
+                ("etag", '"v1"'),
+            ])],
+            "get_login",
+        )
+        resp = _serve(route, "GET", "/login")
+        assert resp.status_code == 200
+        assert resp.headers.get_list("set-cookie") == ["sid=abc; Path=/", "csrf=zzz; Path=/"]
+        assert resp.headers["etag"] == '"v1"'
+
+    def test_the_single_value_output_is_unchanged(self):
+        # Only a repeat needs the extra statements; everything else keeps the
+        # one-line form it has always emitted.
+        route = build_route(
+            "GET", "/old",
+            [self._resp([("location", "/new")], status=302, body="", content_type="text/plain")],
+            "get_old",
+        )
+        assert route.strip().endswith(
+            'return Response(status_code=302, content="", media_type="text/plain", '
+            'headers={"location": "/new"})'
+        )
+
+    def test_the_extra_statements_land_inside_the_branch(self):
+        responses = [
+            self._resp([("set-cookie", "a=1"), ("set-cookie", "b=2")]) | {
+                "request": {"body": '{"role": "admin"}'},
+            },
+            {"status": 403, "body": '{"a": "none"}', "request": {"body": '{"role": "guest"}'}},
+        ]
+        route = build_route("POST", "/r", responses, "post_r", use_smart_fallback=True)
+
+        # Eight spaces: the body of the if, not the function.
+        assert '\n        _response = JSONResponse(content={"ok": 1}' in route
+        assert '\n        _response.headers.append("set-cookie", "b=2")\n' in route
+        assert '\n        return _response\n' in route
+
+        resp = _serve(route, "POST", "/r", json={"role": "admin"})
+        assert resp.status_code == 200
+        assert resp.headers.get_list("set-cookie") == ["a=1", "b=2"]
+
+    def test_a_repeated_header_on_a_non_json_response(self):
+        route = build_route(
+            "GET", "/old",
+            [self._resp(
+                [("location", "/new"), ("set-cookie", "a=1"), ("set-cookie", "b=2")],
+                status=302, body="", content_type="text/plain",
+            )],
+            "get_old",
+        )
+        resp = _serve(route, "GET", "/old", follow_redirects=False)
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "/new"
+        assert resp.headers.get_list("set-cookie") == ["a=1", "b=2"]
+
+    def test_a_repeated_managed_header_is_still_dropped(self):
+        route = build_route(
+            "GET", "/x",
+            [self._resp([("content-length", "999"), ("content-length", "1000"), ("x-ok", "v")])],
+            "get_x",
+        )
+        assert "content-length" not in route
+        assert "headers.append" not in route    # nothing left to repeat
+        assert _serve(route, "GET", "/x").headers["content-length"] != "999"
+
+    def test_parser_keeps_order_and_repeats_while_the_dict_stays_lossy(self, tmp_path):
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET", "url": "https://api.example.com/login",
+                        "headers": [], "queryString": []},
+            "response": {"status": 200,
+                         "headers": [{"name": "Set-Cookie", "value": "sid=1"},
+                                     {"name": "ETag", "value": '"v1"'},
+                                     {"name": "Set-Cookie", "value": "csrf=2"}],
+                         "content": {"mimeType": "application/json", "text": '{"ok": 1}'}},
+            "time": 10,
+        }]}}
+        f = tmp_path / "t.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+        sample = HARParser(str(f)).export_as_dict()["endpoints"][0]["sample_responses"][0]
+
+        assert sample["header_pairs"] == [
+            ["set-cookie", "sid=1"], ["etag", '"v1"'], ["set-cookie", "csrf=2"],
+        ]
+        # The dict is the older, lossy view the dashboard and JSON API expose.
+        assert sample["headers"] == {"set-cookie": "csrf=2", "etag": '"v1"'}
+
+    def test_repeated_cookies_round_trip_through_the_generator(self, tmp_path):
+        har = {"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET", "url": "https://api.example.com/login",
+                        "headers": [], "queryString": []},
+            "response": {"status": 200,
+                         "headers": [{"name": "Set-Cookie", "value": "sid=1"},
+                                     {"name": "Set-Cookie", "value": "csrf=2"}],
+                         "content": {"mimeType": "application/json", "text": '{"ok": 1}'}},
+            "time": 10,
+        }]}}
+        f = tmp_path / "t.har"
+        f.write_text(json.dumps(har), encoding="utf-8")
+        data = HARParser(str(f)).export_as_dict()
+        route = MockGenerator(use_smart_fallback=False).generate_endpoint(
+            data["endpoints"][0]
+        ).generated_code
+
+        resp = _serve(route, "GET", "/login")
+        assert resp.headers.get_list("set-cookie") == ["sid=1", "csrf=2"]
+
+
 class TestGeneratedRouteRuntime:
     """Generated routes must run, not merely compile."""
 

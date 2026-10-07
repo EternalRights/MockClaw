@@ -289,6 +289,21 @@ class TestStatsCommand:
         assert data["endpoints"]["GET /api/old"]["status_codes"] == ["302"]
         assert data["endpoints"]["GET /api/ok"]["status_codes"] == ["200"]
 
+    def test_stats_reads_status_from_the_multi_statement_replay(self, tmp_path):
+        # A repeated response header makes the replay build the response first
+        # and return it, so the status now sits on an assignment line.
+        (tmp_path / "dynamic_api.py").write_text(
+            '@app.get("/api/old")\n'
+            'async def get_api_old():\n'
+            '    _response = JSONResponse(status_code=302, content={"to": "/new"})\n'
+            '    _response.headers.append("set-cookie", "b=2")\n'
+            '    return _response\n',
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["stats", str(tmp_path), "--json"])
+        data = json.loads(result.stdout)
+        assert data["endpoints"]["GET /api/old"]["status_codes"] == ["302"]
+
     # --- endpoint discovery -------------------------------------------
 
     def test_stats_discovers_api_route_endpoints(self, tmp_path):

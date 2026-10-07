@@ -137,6 +137,10 @@ class HTTPResponse:
     body: str | None = None
     content_type: str | None = None
     latency_ms: int = 0
+    # The same headers in recorded order, with repeats kept. ``headers`` is
+    # the lossy view the dashboard and the JSON API have always exposed; this
+    # is what the generated route replays, so a repeated Set-Cookie survives.
+    header_pairs: list[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -212,15 +216,25 @@ class HARParser:
         path = _unique_placeholders(ID_PATTERN, path, 'id')
         return path or '/'
 
-    def _parse_headers(self, headers: list | None) -> dict:
-        """Convert headers list to dictionary."""
-        result = {}
+    def _parse_header_pairs(self, headers: list | None) -> list[tuple[str, str]]:
+        """Header name/value pairs in recorded order, duplicates kept.
+
+        The HAR spec allows one name more than once; Set-Cookie is the case
+        that matters, and collapsing into a dict kept only the last one -- a
+        login that set a session cookie and a csrf cookie replayed one of
+        them. Names are lowercased the way ``_parse_headers`` has always done.
+        """
+        pairs: list[tuple[str, str]] = []
         for h in headers or []:
             h = _as_mapping(h)
             name = h.get('name')
             if name:
-                result[str(name).lower()] = _to_str(h.get('value'))
-        return result
+                pairs.append((str(name).lower(), _to_str(h.get('value'))))
+        return pairs
+
+    def _parse_headers(self, headers: list | None) -> dict:
+        """Convert headers list to dictionary."""
+        return dict(self._parse_header_pairs(headers))
 
     def _parse_request(self, entry: dict) -> HTTPRequest:
         """Parse a HAR entry's request."""
@@ -285,6 +299,7 @@ class HARParser:
             body=_to_str(content.get('text')) or None,
             content_type=content_type,
             latency_ms=_to_int(entry.get('time'), 0),
+            header_pairs=self._parse_header_pairs(response.get('headers', [])),
         )
 
     def parse(self) -> list[APIEndpoint]:
@@ -371,6 +386,7 @@ class HARParser:
                         {
                             "status": r.status,
                             "headers": r.headers,
+                            "header_pairs": [list(pair) for pair in r.header_pairs],
                             "body": r.body,
                             "content_type": r.content_type,
                             "request": {
