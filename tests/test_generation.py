@@ -17,7 +17,7 @@ from core.generation_strategy import (
     LLMGenerationStrategy,
     TemplateGenerationStrategy,
 )
-from core.prompt_builder import PromptBuilder
+from core.prompt_builder import PromptBuilder, _MAX_BODY_CHARS
 
 
 def test_har_parser(tmp_path, minimal_har_data):
@@ -2286,6 +2286,50 @@ class TestBuiltinRouteSkip:
             self._entry("get", "https://api.example.com/health", '{"captured": true}'),
         ])
         assert "captured" not in src
+
+
+class TestPromptBody:
+    """The prompt says what was recorded, and stays a workable size."""
+
+    def _prompt(self, tmp_path, entries):
+        f = tmp_path / "t.har"
+        f.write_text(json.dumps({"log": {"version": "1.2", "entries": entries}}),
+                     encoding="utf-8")
+        return PromptBuilder().build_prompt(
+            HARParser(str(f)).export_as_dict()["endpoints"][0]
+        )
+
+    @staticmethod
+    def _entry(response_text=None, response_mime="application/json"):
+        return {
+            "request": {"method": "DELETE", "url": "https://api.example.com/api/x",
+                        "headers": [], "queryString": []},
+            "response": {"status": 204 if response_text is None else 200, "headers": [],
+                         "content": {"mimeType": response_mime, "text": response_text}},
+            "time": 10,
+        }
+
+    def test_a_missing_body_is_not_rendered_as_none(self, tmp_path):
+        # A 204 carries no body and the parser stores None for it. Asking for
+        # it with get('body', 'N/A') printed the literal None, because the key
+        # exists and only a missing key takes the default.
+        prompt = self._prompt(tmp_path, [self._entry()])
+
+        assert prompt.count("- Body: N/A") == 2
+        assert "None" not in prompt
+
+    def test_a_large_body_is_capped_and_says_so(self, tmp_path):
+        body = json.dumps({"items": [{"id": i, "name": "x" * 40} for i in range(4000)]})
+        prompt = self._prompt(tmp_path, [self._entry(body)])
+
+        assert len(prompt) < _MAX_BODY_CHARS + 500
+        assert f"{len(body)} characters recorded" in prompt
+
+    def test_a_body_within_the_cap_is_passed_through(self, tmp_path):
+        prompt = self._prompt(tmp_path, [self._entry('{"ok": true}')])
+
+        assert '{"ok": true}' in prompt
+        assert "truncated" not in prompt
 
 
 class TestEntriesWithoutAUrl:

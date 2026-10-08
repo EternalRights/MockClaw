@@ -30,6 +30,27 @@ Generate ONLY the Python code with:
 Return ONLY the Python code in a markdown code block labeled 'python'."""
 
 
+# A recorded body can be enormous: a list endpoint with a few thousand rows
+# produced a 260KB capture, and pasting it whole made a 66k-token prompt, so
+# the call fails on the model's context limit or costs far more than one
+# endpoint is worth. What the model copies from the body is its structure, and
+# the start of it carries that.
+_MAX_BODY_CHARS = 4000
+
+
+def _body_for_prompt(body: Any) -> str:
+    """Render a recorded body for the prompt, capped, with the cut marked."""
+    if not body:
+        # Absent and null both mean "no body here" (the parser stores None for
+        # a body that was not recorded), and get('body', 'N/A') prints the
+        # literal None because the key exists.
+        return "N/A"
+    text = body if isinstance(body, str) else str(body)
+    if len(text) <= _MAX_BODY_CHARS:
+        return text
+    return f"{text[:_MAX_BODY_CHARS]}... (truncated, {len(text)} characters recorded)"
+
+
 class PromptBuilder:
     """Builds LLM prompts from HAR endpoint data.
 
@@ -56,11 +77,11 @@ class PromptBuilder:
             f"Method: {endpoint_data['method']}\n"
             f"Path: {endpoint_data['resource_path']}\n\n"
             f"Sample Request:\n"
-            f"- Body: {req.get('body', 'N/A')}\n"
+            f"- Body: {_body_for_prompt(req.get('body'))}\n"
             f"- Query Params: {json.dumps(req.get('query_params', {}), indent=2)}\n\n"
             f"Sample Response:\n"
             f"- Status: {resp.get('status', 200)}\n"
-            f"- Body: {resp.get('body', 'N/A')}"
+            f"- Body: {_body_for_prompt(resp.get('body'))}"
         )
 
         if len(all_responses) > 1:
