@@ -2288,6 +2288,62 @@ class TestBuiltinRouteSkip:
         assert "captured" not in src
 
 
+class TestScenariosFromDifferentOrigins:
+    """A path shared by two origins lands in one endpoint, so say which is which.
+
+    api.example.com and cdn.other.com can both serve /v1/status and the mock
+    answers on a single origin, so the parser merges them. Listing the
+    scenarios without their origin read as two variants of one host's
+    endpoint, and the default answer, taken from whichever was captured first,
+    was left unexplained.
+    """
+
+    @staticmethod
+    def _entry(url, body):
+        return {
+            "request": {"method": "GET", "url": url, "headers": [], "queryString": []},
+            "response": {"status": 200, "headers": [],
+                         "content": {"mimeType": "application/json", "text": body}},
+            "time": 10,
+        }
+
+    def _endpoint_and_route(self, tmp_path, entries):
+        f = tmp_path / "t.har"
+        f.write_text(json.dumps({"log": {"version": "1.2", "entries": entries}}),
+                     encoding="utf-8")
+        endpoint = HARParser(str(f)).export_as_dict()["endpoints"][0]
+        route = MockGenerator(use_smart_fallback=False).generate_endpoint(
+            endpoint
+        ).generated_code
+        return endpoint, route
+
+    def test_the_origin_is_named_when_it_varies(self, tmp_path):
+        _, route = self._endpoint_and_route(tmp_path, [
+            self._entry("https://api.example.com/v1/status", '{"host": "api"}'),
+            self._entry("https://cdn.other.com/v1/status", '{"host": "cdn"}'),
+        ])
+
+        assert '(from api.example.com)' in route
+        assert '(from cdn.other.com)' in route
+
+    def test_one_origin_keeps_the_plain_listing(self, tmp_path):
+        _, route = self._endpoint_and_route(tmp_path, [
+            self._entry("https://api.example.com/v1/status", '{"n": 1}'),
+            self._entry("https://api.example.com/v1/status", '{"n": 2}'),
+        ])
+
+        assert "(from " not in route
+
+    def test_each_response_keeps_the_url_it_came_from(self, tmp_path):
+        urls = ["https://api.example.com/v1/status", "https://cdn.other.com/v1/status"]
+        endpoint, _ = self._endpoint_and_route(tmp_path, [
+            self._entry(urls[0], '{"host": "api"}'),
+            self._entry(urls[1], '{"host": "cdn"}'),
+        ])
+
+        assert [r["request"]["url"] for r in endpoint["sample_responses"]] == urls
+
+
 class TestPromptBody:
     """The prompt says what was recorded, and stays a workable size."""
 

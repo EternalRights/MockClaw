@@ -409,6 +409,11 @@ class HARParser:
                             "request": {
                                 "body": ep.requests[i].body if i < len(ep.requests) and ep.requests[i].body else None,
                                 "query_params": ep.requests[i].query_params if i < len(ep.requests) else {},
+                                # The api and the cdn often share a path, and
+                                # the mock can only answer on one origin, so
+                                # each scenario has to keep the origin it was
+                                # captured from.
+                                "url": ep.requests[i].url if i < len(ep.requests) else "",
                             } if ep.requests else None,
                         }
                         for i, r in enumerate(ep.responses)

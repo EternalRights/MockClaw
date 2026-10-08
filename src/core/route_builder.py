@@ -10,6 +10,7 @@ import logging
 import math
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 _FB = "    "
 
@@ -458,6 +459,17 @@ def build_route(
     sig = ", ".join(_arg_signature(path, sample_query_params))
 
     if len(all_responses) > 1:
+        # Captures from two origins that share a path land in one endpoint,
+        # because the mock answers on a single origin. Naming the origin on
+        # each scenario line keeps a surprising answer explainable: without it
+        # "2 HAR scenarios recorded" hides that the default one came from a
+        # host this endpoint was never about.
+        origins = [
+            urlparse(r.get("request", {}).get("url") or "").netloc
+            for r in all_responses
+        ]
+        show_origins = len({origin for origin in origins if origin}) > 1
+
         lines = [
             _route_decorator(method, path),
             f"async def {func_name}({sig}):",
@@ -466,7 +478,9 @@ def build_route(
         for i, resp in enumerate(all_responses, start=1):
             sc = resp.get("status") or 200
             preview = _docstring_safe((resp.get("body") or "")[:60])
-            lines.append(f'{_FB}  [{i}] status {sc}: {preview}')
+            origin = origins[i - 1]
+            from_origin = f" (from {origin})" if show_origins and origin else ""
+            lines.append(f'{_FB}  [{i}] status {sc}: {preview}{from_origin}')
         lines.append(f'{_FB}"""')
         if latency:
             lines.append(latency.rstrip("\n"))
