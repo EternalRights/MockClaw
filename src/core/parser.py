@@ -212,6 +212,13 @@ class HARParser:
         # mocked 404 for the very request it recorded. unquote, not
         # unquote_plus -- '+' is a literal character in a path, not a space.
         path = unquote(parsed.path)
+        if path and not path.startswith('/'):
+            # A url with no scheme (a hand-written archive, or a bare relative
+            # request target) leaves the whole string in .path, so the route
+            # came out as @app.get("api/x"). It registers fine and then
+            # nothing can ever reach it, because requests arrive as "/api/x".
+            # The leading slash is what makes the route match.
+            path = '/' + path
         path = _unique_placeholders(UUID_PATTERN, path, 'uuid')
         path = _unique_placeholders(ID_PATTERN, path, 'id')
         return path or '/'
@@ -326,6 +333,16 @@ class HARParser:
                 continue
 
             request = self._parse_request(entry)
+            if not request.url.strip():
+                # The guard above catches entries that are not objects; this
+                # catches an object whose request is null, missing or carries
+                # no url. Both fabricate the same bogus "GET /" endpoint --
+                # _extract_url_path("") is "/" -- and when the archive also
+                # held a real root entry the phantom was merged into it, its
+                # body landing as the first scenario. The mock's default
+                # answer for "/" then came from the junk entry.
+                continue
+
             response = self._parse_response(entry)
             resource_path = self._extract_url_path(request.url)
 

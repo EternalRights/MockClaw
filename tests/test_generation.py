@@ -839,9 +839,10 @@ class TestNullFieldTolerance:
         assert "status_code=None" not in src
         assert "None" not in src.split("# === Generated Endpoints ===")[-1]
 
-    def test_null_response_and_request_still_parse(self, tmp_path):
+    def test_null_response_fields_still_parse(self, tmp_path):
         har = {"log": {"version": "1.2", "entries": [{
-            "request": None,
+            "request": {"method": "GET", "url": "https://api.example.com/a",
+                        "headers": [], "queryString": []},
             "response": None,
             "time": None,
         }]}}
@@ -879,16 +880,16 @@ class TestNullFieldTolerance:
 
     def test_null_url_does_not_crash_the_parse(self, tmp_path):
         # urlparse(None) raised inside the static-asset check before the
-        # request was even parsed, taking the whole file down.
+        # request was even parsed, taking the whole file down. The entry has
+        # no url at all now, so it is dropped rather than turned into a
+        # fabricated "GET /" that could merge into a real root entry.
         har = {"log": {"version": "1.2", "entries": [{
             "request": {"method": "GET", "url": None, "headers": [], "queryString": []},
             "response": {"status": 200, "headers": [],
                          "content": {"mimeType": "application/json", "text": "{}"}},
             "time": 10,
         }]}}
-        endpoints = self._parse(har, tmp_path)
-        assert len(endpoints) == 1
-        assert endpoints[0].resource_path == "/"
+        assert self._parse(har, tmp_path) == []
 
     def test_non_string_url_does_not_crash_the_parse(self, tmp_path):
         har = {"log": {"version": "1.2", "entries": [{
@@ -899,6 +900,7 @@ class TestNullFieldTolerance:
         }]}}
         endpoints = self._parse(har, tmp_path)
         assert len(endpoints) == 1
+        assert endpoints[0].resource_path == "/{id}"
 
     def test_non_mapping_list_items_are_skipped(self, tmp_path):
         # A bare string where the HAR spec says object used to raise
@@ -922,7 +924,9 @@ class TestNullFieldTolerance:
             "response": "oops",
             "time": 10,
         }]}}
-        assert len(self._parse(har, tmp_path)) == 1
+        # Both are strings where objects belong, so the entry carries no url
+        # and no path to mock. It is dropped instead of becoming a "GET /".
+        assert self._parse(har, tmp_path) == []
 
     def test_null_entry_is_dropped_not_fabricated(self, tmp_path):
         # A null in the entries array is not an entry; coercing it to {} would
@@ -2282,6 +2286,67 @@ class TestBuiltinRouteSkip:
             self._entry("get", "https://api.example.com/health", '{"captured": true}'),
         ])
         assert "captured" not in src
+
+
+class TestEntriesWithoutAUrl:
+    """An entry with no request url has no path to mock.
+
+    The guard in parse() already dropped entries that are not objects, because
+    coercing one to {} fabricates a bogus "GET /". An object whose request was
+    null, missing or carried an empty url got through the same way:
+    _extract_url_path("") is "/", and when the archive also held a real root
+    entry the phantom was merged into it, its body landing as the first
+    scenario. The mock then answered the junk entry for "/".
+    """
+
+    def _parse(self, tmp_path, entries):
+        f = tmp_path / "t.har"
+        f.write_text(json.dumps({"log": {"version": "1.2", "entries": entries}}),
+                     encoding="utf-8")
+        return HARParser(str(f)).export_as_dict()
+
+    @staticmethod
+    def _good(url, body='{"real": true}'):
+        return {
+            "request": {"method": "GET", "url": url, "headers": [], "queryString": []},
+            "response": {"status": 200, "headers": [],
+                         "content": {"mimeType": "application/json", "text": body}},
+            "time": 10,
+        }
+
+    @staticmethod
+    def _without_url(request, body='{"phantom": 1}'):
+        return {
+            "request": request,
+            "response": {"status": 200, "headers": [],
+                         "content": {"mimeType": "application/json", "text": body}},
+            "time": 10,
+        }
+
+    @pytest.mark.parametrize("raw_request", [
+        None,
+        {"method": "GET", "headers": [], "queryString": []},
+        {"method": "GET", "url": "", "headers": [], "queryString": []},
+        {"method": "GET", "url": "   ", "headers": [], "queryString": []},
+    ])
+    def test_it_is_dropped(self, tmp_path, raw_request):
+        assert self._parse(tmp_path, [self._without_url(raw_request)])["endpoints"] == []
+
+    def test_it_does_not_merge_into_a_real_root_entry(self, tmp_path):
+        data = self._parse(tmp_path, [
+            self._without_url(None),
+            self._good("https://api.example.com/"),
+        ])
+
+        assert len(data["endpoints"]) == 1
+        endpoint = data["endpoints"][0]
+        assert endpoint["resource_path"] == "/"
+        assert [r["body"] for r in endpoint["sample_responses"]] == ["{\"real\": true}"]
+
+    def test_a_relative_url_is_still_kept(self, tmp_path):
+        data = self._parse(tmp_path, [self._good("/api/rel")])
+
+        assert [e["resource_path"] for e in data["endpoints"]] == ["/api/rel"]
 
 
 class TestRecordedTextIsNotSource:
