@@ -2288,6 +2288,51 @@ class TestBuiltinRouteSkip:
         assert "captured" not in src
 
 
+class TestHtmlErrorResponsesAreKept:
+    """A gateway error page is a recorded api behaviour, not a page asset.
+
+    The static-asset filter dropped anything typed text/html, so a recorded
+    502 went missing from the mock while the same outage delivered as JSON was
+    kept. Same behaviour, kept or dropped depending on how the gateway words
+    its error page.
+    """
+
+    def _endpoints(self, tmp_path, url, status, mime, body="<html></html>"):
+        f = tmp_path / "t.har"
+        f.write_text(json.dumps({"log": {"version": "1.2", "entries": [{
+            "request": {"method": "GET", "url": url, "headers": [], "queryString": []},
+            "response": {"status": status, "headers": [],
+                         "content": {"mimeType": mime, "text": body}},
+            "time": 10,
+        }]}}), encoding="utf-8")
+        return HARParser(str(f)).export_as_dict()["endpoints"]
+
+    @pytest.mark.parametrize("status", [404, 500, 502, 503])
+    def test_an_html_error_response_is_kept(self, tmp_path, status):
+        endpoints = self._endpoints(
+            tmp_path, "https://api.example.com/api/orders", status, "text/html",
+        )
+        assert [e["resource_path"] for e in endpoints] == ["/api/orders"]
+
+    def test_a_json_error_response_is_kept_too(self, tmp_path):
+        endpoints = self._endpoints(
+            tmp_path, "https://api.example.com/api/orders", 500, "application/json",
+            body='{"error": "boom"}',
+        )
+        assert len(endpoints) == 1
+
+    def test_an_html_page_is_still_filtered(self, tmp_path):
+        assert self._endpoints(
+            tmp_path, "https://www.example.com/about", 200, "text/html",
+        ) == []
+
+    def test_an_asset_url_is_filtered_even_when_it_errors(self, tmp_path):
+        # A 404 for a missing image is asset noise, not something to mock.
+        assert self._endpoints(
+            tmp_path, "https://www.example.com/assets/logo.png", 404, "image/png", body="",
+        ) == []
+
+
 class TestScenariosFromDifferentOrigins:
     """A path shared by two origins lands in one endpoint, so say which is which.
 

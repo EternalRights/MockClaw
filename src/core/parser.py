@@ -194,6 +194,14 @@ class HARParser:
         content = _as_mapping(response.get('content'))
         mime_type = _to_str(content.get('mimeType')).lower()
 
+        if _to_int(response.get('status'), 200) >= 400:
+            # An api that answered with a gateway's error page is typed
+            # text/html, and filtering on the type dropped it: a recorded 502
+            # was missing from the mock while the same outage delivered as
+            # JSON was kept. The extension check above still applies, because
+            # a 404 for /assets/logo.png really is asset noise.
+            return False
+
         for prefix in STATIC_MIME_PREFIXES:
             if mime_type.startswith(prefix):
                 return True
