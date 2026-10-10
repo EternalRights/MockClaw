@@ -349,9 +349,25 @@ def _arg_signature(path: str, query_params: dict[str, Any] | None) -> list[str]:
     is already taken is suffixed and rebound through ``alias=`` so it still
     binds to the key the HAR recorded.
     """
+    return _arg_signature_with_names(path, query_params)[0]
+
+
+def _arg_signature_with_names(
+    path: str,
+    query_params: dict[str, Any] | None,
+) -> tuple[list[str], dict[str, str]]:
+    """``_arg_signature`` plus the key -> declared-argument-name map.
+
+    The name map is what lets a conditional branch test the parameter the
+    signature actually declared. When a query key and a path placeholder
+    share a name, ``_arg_signature`` renames the query one (``id`` ->
+    ``id_2``); a branch written against the raw key would then read the
+    path segment instead of the recorded query value.
+    """
     used: set[str] = set()
     required: list[str] = []
     defaulted: list[str] = []
+    renamed: dict[str, str] = {}
 
     def _claim(name: str) -> str:
         candidate, suffix = name, 2
@@ -371,6 +387,7 @@ def _arg_signature(path: str, query_params: dict[str, Any] | None) -> list[str]:
     if query_params:
         for param, default_val in query_params.items():
             safe = _claim(_safe_param_name(param))
+            renamed[param] = safe
             # json.dumps handles quotes/backslashes/newlines inside the value;
             # a plain f-string interpolation would emit broken Python.
             default_literal = json.dumps(str(default_val))
@@ -387,7 +404,7 @@ def _arg_signature(path: str, query_params: dict[str, Any] | None) -> list[str]:
 
     # A renamed placeholder carries a default, and Python forbids a defaulted
     # parameter ahead of a required one, so the plain ones lead.
-    return required + defaulted
+    return required + defaulted, renamed
 
 
 def build_route(
@@ -781,7 +798,8 @@ def _generate_query_route(
     for field in all_fields:
         declared.setdefault(field, "")
 
-    sig = ", ".join(_arg_signature(path, declared))
+    sig_list, param_names = _arg_signature_with_names(path, declared)
+    sig = ", ".join(sig_list)
 
     lines = [
         _route_decorator(method, path),
@@ -806,7 +824,7 @@ def _generate_query_route(
         first = True
         for qp, status_, resp_body, resp_ct, resp_headers, resp_pairs in distinct:
             checks = [
-                f'{_safe_param_name(field)} == {_py_literal(qp[field])}'
+                f'{param_names.get(field, _safe_param_name(field))} == {_py_literal(qp[field])}'
                 for field in fields
                 if field in qp
             ]

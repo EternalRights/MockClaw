@@ -654,6 +654,28 @@ class TestUniqueArgumentNames:
         params = app.openapi()["paths"]["/s"]["get"].get("parameters", [])
         assert {(p["name"], p["in"]) for p in params} == {("a b", "query"), ("a-b", "query")}
 
+    def test_query_branch_tests_the_renamed_arg_not_the_path(self):
+        # A query key that sanitizes onto a path placeholder gets renamed in
+        # the signature ("id" -> "id_2"). The branch has to test the renamed
+        # argument: testing the raw "id" reads the path segment instead of the
+        # recorded query value, and the mock answered whichever scenario the
+        # URL happened to name.
+        responses = [
+            {"status": 200, "body": '{"tier": "a"}', "request": {"query_params": {"id": "7"}}},
+            {"status": 200, "body": '{"tier": "b"}', "request": {"query_params": {"id": "9"}}},
+        ]
+        route = build_route(
+            "GET", "/api/report/{id}", responses, "get_api_report_id",
+            use_smart_fallback=True, sample_request={"query_params": {"id": "7"}},
+        )
+        assert 'if id_2 == "7"' in route
+        assert 'if id == "7"' not in route
+
+        # The path segment must not decide the branch: /api/report/9?id=7 is
+        # scenario 1, and /api/report/7?id=9 is scenario 2.
+        assert _serve(route, "GET", "/api/report/9", params={"id": "7"}).json() == {"tier": "a"}
+        assert _serve(route, "GET", "/api/report/7", params={"id": "9"}).json() == {"tier": "b"}
+
 
 class TestDuplicateEntryCollapse:
     """Identical entries from polling/retries should collapse to one."""
