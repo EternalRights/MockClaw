@@ -1567,6 +1567,25 @@ class TestQueryRouteGeneration:
         assert "status_code=500" in route
         compile(route, "<route>", "exec")
 
+    def test_scenario_recorded_without_a_query_string_is_still_reachable(self):
+        # The path was captured twice: once bare, once with ?q=books. The
+        # sampler keeps only the first request, so the query string lives on
+        # the second response alone. Routing used to be decided from the
+        # sample, and the bare first capture sent the endpoint down the plain
+        # route: the "?q=books" body was listed as a scenario and never served.
+        responses = [
+            {"status": 200, "body": '{"hits": 0}', "request": {"query_params": {}}},
+            {"status": 200, "body": '{"hits": 7}', "request": {"query_params": {"q": "books"}}},
+        ]
+        route = build_route(
+            "GET", "/search", responses, "get_search",
+            use_smart_fallback=True, sample_request={"query_params": {}},
+        )
+        assert 'if q == "books"' in route
+        assert _serve(route, "GET", "/search", params={"q": "books"}).json() == {"hits": 7}
+        assert _serve(route, "GET", "/search").json() == {"hits": 0}
+        compile(route, "<route>", "exec")
+
 
 def _exec_route(route: str):
     """Exec a generated route into a throwaway FastAPI app.

@@ -434,7 +434,7 @@ def build_route(
     latency = _latency_line(latency_ms)
 
     has_request_body = any(
-        resp.get("request", {}).get("body")
+        (resp.get("request") or {}).get("body")
         for resp in all_responses
     )
 
@@ -442,7 +442,14 @@ def build_route(
         (sample_request or {}).get("query_params") or {}
     )
 
-    has_query_params = bool(sample_query_params)
+    # Every response counts, not just the sampled one. A path can be captured
+    # first with no query string and again with one, and deciding on the
+    # sample alone sent those to the plain route: the second scenario stayed
+    # in the docstring and answered the first response forever.
+    has_query_params = bool(sample_query_params) or any(
+        (resp.get("request") or {}).get("query_params")
+        for resp in all_responses
+    )
 
     if use_smart_fallback and method in ["POST", "PUT", "PATCH", "DELETE"] and has_request_body:
         return _generate_smart_route(method, path, all_responses, func_name, latency_ms)
@@ -759,27 +766,25 @@ def _generate_query_route(
     """
     latency = _latency_line(latency_ms)
 
-    if not sample_request:
-        return build_route(method, path, all_responses, func_name, use_smart_fallback=False, latency_ms=latency_ms)
-
-    query_params = sample_request.get("query_params", {})
-    if not query_params:
-        return build_route(method, path, all_responses, func_name, use_smart_fallback=False, latency_ms=latency_ms)
+    query_params = (sample_request or {}).get("query_params") or {}
 
     # Collect each response's query params and find the fields that separate
-    # them, mirroring the body-based smart routing logic.
+    # them, mirroring the body-based smart routing logic. A response whose
+    # request carried no query string still belongs here: it is the scenario
+    # the ``else`` branch answers, and leaving it out meant a lone param-bearing
+    # response had nothing to be told apart from, so no branch was emitted for
+    # it at all.
     distinct: list[tuple[Any, ...]] = []
     for resp in all_responses:
-        qp = resp.get("request", {}).get("query_params", {})
-        if qp:
-            distinct.append((
-                qp,
-                resp.get("status") or 200,
-                resp.get("body") or "{}",
-                resp.get("content_type"),
-                resp.get("headers"),
-                resp.get("header_pairs"),
-            ))
+        qp = (resp.get("request") or {}).get("query_params") or {}
+        distinct.append((
+            qp,
+            resp.get("status") or 200,
+            resp.get("body") or "{}",
+            resp.get("content_type"),
+            resp.get("headers"),
+            resp.get("header_pairs"),
+        ))
 
     distinct = _dedupe_requests(distinct)
 
@@ -788,6 +793,11 @@ def _generate_query_route(
         for field in item[0]:
             if field not in all_fields:
                 all_fields.append(field)
+
+    if not query_params and not all_fields:
+        # Neither the sampled request nor any recorded response carried a
+        # query string, so there is nothing to branch on.
+        return build_route(method, path, all_responses, func_name, use_smart_fallback=False, latency_ms=latency_ms)
 
     fields = _select_discriminating_fields(distinct, all_fields) if len(distinct) >= 2 else []
 
