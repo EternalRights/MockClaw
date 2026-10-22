@@ -1706,6 +1706,27 @@ class TestNonJsonResponseReplay:
         assert resp.text == "plain text", resp.text
         assert resp.headers["content-type"].startswith("text/plain")
 
+    @pytest.mark.parametrize(
+        "ctype",
+        ["application/x-ndjson", "application/jsonl", "application/json-seq"],
+    )
+    def test_line_delimited_json_is_replayed_verbatim(self, ctype):
+        # These types hold the word json but are not a single document, so
+        # json.loads fails. The old branch fell back to a quoted string: an
+        # Elasticsearch _bulk response or a log stream reached the client as
+        # one JSON string instead of the lines that were recorded.
+        body = '{"a": 1}\n{"b": 2}\n'
+        route = build_route(
+            "GET", "/api/bulk",
+            [{"status": 200, "body": body, "content_type": ctype}],
+            "get_api_bulk",
+        )
+        assert f'media_type="{ctype}"' in route
+
+        resp = _serve(route, "GET", "/api/bulk")
+        assert resp.content == body.encode(), ctype
+        assert resp.headers["content-type"].startswith(ctype)
+
     def test_recorded_charset_is_preserved(self):
         route = build_route(
             "GET", "/api/plain",

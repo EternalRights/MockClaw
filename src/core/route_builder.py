@@ -60,6 +60,15 @@ def body_literal(body_text: str) -> str:
         return json.dumps(body_text)
 
 
+# JSON media types that do not carry a single document. A line-delimited
+# stream (ndjson/jsonl), RFC 7464's json-seq and JSONP all hold JSON-looking
+# bytes that json.loads cannot read as one value. Treating them as JSON
+# re-encoded the capture as a quoted string: an Elasticsearch _bulk response
+# or a log stream came back as one JSON string instead of its lines, so a
+# client that parsed the recorded format could no longer read the mock.
+_SEQUENTIAL_JSON_MARKERS = ("ndjson", "jsonl", "jsonlines", "json-seq", "jsonseq", "jsonp")
+
+
 def _is_json_content_type(content_type: str | None) -> bool:
     """Whether a recorded content type should be replayed as JSON.
 
@@ -68,7 +77,10 @@ def _is_json_content_type(content_type: str | None) -> bool:
     """
     if not content_type:
         return True
-    return "json" in content_type.lower()
+    lowered = content_type.lower()
+    if "json" not in lowered:
+        return False
+    return not any(marker in lowered for marker in _SEQUENTIAL_JSON_MARKERS)
 
 
 def _has_non_finite_constant(body_text: str) -> bool:
