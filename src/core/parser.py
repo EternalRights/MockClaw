@@ -108,6 +108,20 @@ def _to_str(value: object, default: str = "") -> str:
     return value if isinstance(value, str) else str(value)
 
 
+def _is_json_mime(mime_type: str) -> bool:
+    """Whether a ``postData.mimeType`` describes a JSON body.
+
+    ``application/json`` is the common case, but JSON:API and RFC 7807 send
+    ``application/vnd.api+json`` and ``application/problem+json``. Comparing
+    the type with ``==`` dropped those bodies, and without a request body the
+    smart router has nothing to branch on: every recorded scenario collapsed
+    to the first response. The ``+json`` suffix is the convention that marks
+    a media type as JSON (RFC 6839), so accept it as well as the plain type.
+    """
+    base = mime_type.split(';')[0].strip().lower()
+    return base == 'application/json' or base.endswith('+json')
+
+
 def _as_mapping(value: object) -> dict:
     """Return *value* when it is an object, else an empty dict.
 
@@ -277,8 +291,7 @@ class HARParser:
             post_data = _as_mapping(request['postData'])
             # HAR mimeType can carry parameters (e.g. "application/json;
             # charset=utf-8"); a plain equality check would drop the body.
-            mime_type = _to_str(post_data.get('mimeType')).split(';')[0].strip().lower()
-            if mime_type == 'application/json':
+            if _is_json_mime(_to_str(post_data.get('mimeType'))):
                 body = _to_str(post_data.get('text'))
 
         return HTTPRequest(

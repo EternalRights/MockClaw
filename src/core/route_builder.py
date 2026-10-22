@@ -665,7 +665,12 @@ def _generate_smart_route(
     ]
     if latency:
         lines.append(latency.rstrip("\n"))
-    lines.append(f'{_FB}body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {{}}')
+    # The branches below read the request body, so the guard has to accept
+    # every JSON media type, not just the plain one: a client replaying a
+    # JSON:API capture sends application/vnd.api+json, which does not start
+    # with "application/json", and the body came back as {} -- every branch
+    # missed and the mock answered its default scenario for all of them.
+    lines.append(f'{_FB}body = await request.json() if "json" in request.headers.get("content-type", "").lower() else {{}}')
     lines.append("")
 
     emitted: set[str] = set()

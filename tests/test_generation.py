@@ -781,6 +781,17 @@ class TestPostDataBodyParsing:
         ep = self._parse("application/json; charset=utf-8", '{"msg": "hi"}', tmp_path)
         assert ep.requests[0].body == '{"msg": "hi"}'
 
+    def test_vendor_json_mime_type_is_parsed(self, tmp_path):
+        # JSON:API sends application/vnd.api+json. Comparing the type with ==
+        # dropped the body, and without one the smart router has nothing to
+        # branch on: every recorded scenario collapsed to the first response.
+        ep = self._parse("application/vnd.api+json", '{"msg": "hi"}', tmp_path)
+        assert ep.requests[0].body == '{"msg": "hi"}'
+
+    def test_problem_json_mime_type_is_parsed(self, tmp_path):
+        ep = self._parse("application/problem+json", '{"msg": "hi"}', tmp_path)
+        assert ep.requests[0].body == '{"msg": "hi"}'
+
     def test_non_json_mime_type_ignored(self, tmp_path):
         ep = self._parse("text/plain", "not json", tmp_path)
         assert ep.requests[0].body is None
@@ -2672,6 +2683,26 @@ class TestGeneratedRouteRuntime:
         denied = _serve(route, "POST", "/api/perm", json={"role": "guest"})
         assert denied.status_code == 403, denied.text
         assert denied.json() == {"err": "nope"}
+
+    def test_smart_route_reads_a_vendor_json_body(self):
+        # A JSON:API client sends Content-Type: application/vnd.api+json. The
+        # guard required the header to start with "application/json", so the
+        # body came through as {} and every branch missed: the mock answered
+        # its default scenario for a request it had recorded an error for.
+        responses = [
+            {"status": 200, "body": '{"total": 71.98}', "request": {"body": '{"coupon": "SAVE10"}'}},
+            {"status": 400, "body": '{"err": "expired"}', "request": {"body": '{"coupon": "EXPIRED"}'}},
+        ]
+        route = build_route(
+            "POST", "/api/checkout", responses, "post_api_checkout", use_smart_fallback=True,
+        )
+        resp = _serve(
+            route, "POST", "/api/checkout",
+            content=b'{"coupon": "EXPIRED"}',
+            headers={"content-type": "application/vnd.api+json"},
+        )
+        assert resp.status_code == 400, resp.text
+        assert resp.json() == {"err": "expired"}
 
 
 class TestPathAndQueryDeclaration:
