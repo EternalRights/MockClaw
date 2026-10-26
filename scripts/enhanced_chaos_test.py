@@ -308,16 +308,23 @@ class EnhancedChaosBreaker:
         ]
 
         import requests
+        server_errors = 0
         for url in malformed_urls:
             try:
                 response = requests.get(f"{self.base_url}{url}", timeout=5)
                 if response.status_code >= 500:
                     self.log(f"Server error on malformed URL {url}: {response.status_code}", "FAIL")
+                    server_errors += 1
                 else:
                     self.log(f"Malformed URL handled: {url} -> {response.status_code}")
             except requests.RequestException as e:
                 self.log(f"Malformed URL test error: {e}", "WARN")
 
+        # The test used to return "passed" no matter what it found, so the
+        # results table listed it as a pass while the run also printed the
+        # failures it had just logged.
+        if server_errors:
+            return {"status": "failed", "server_errors": server_errors}
         return {"status": "passed", "handled": len(malformed_urls)}
 
     async def test_rate_limiting(self):

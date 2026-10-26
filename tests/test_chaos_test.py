@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
@@ -135,6 +136,41 @@ class TestSummaryFailureCount:
 
         assert summary["failures"] == 1
         assert _exit_code(summary) == 1
+
+
+class _Resp500:
+    status_code = 500
+
+
+class _Resp400:
+    status_code = 400
+
+
+class TestMalformedUrlReporting:
+    """A malformed URL answered with 5xx is a failure, not a pass.
+
+    The test logged FAIL for each 5xx and then returned "passed", so the
+    results table printed PASS next to the failures it had just recorded.
+    """
+
+    def test_a_server_error_is_reported_as_failed(self, monkeypatch):
+        monkeypatch.setattr(requests, "get", lambda url, timeout=None: _Resp500())
+        breaker = chaos.EnhancedChaosBreaker(base_url="http://127.0.0.1:1")
+
+        result = asyncio.run(breaker.test_malformed_urls())
+
+        assert result["status"] == "failed"
+        assert result["server_errors"] == 6
+        assert len(breaker.failures) == 6
+
+    def test_a_handled_url_is_reported_as_passed(self, monkeypatch):
+        monkeypatch.setattr(requests, "get", lambda url, timeout=None: _Resp400())
+        breaker = chaos.EnhancedChaosBreaker(base_url="http://127.0.0.1:1")
+
+        result = asyncio.run(breaker.test_malformed_urls())
+
+        assert result["status"] == "passed"
+        assert breaker.failures == []
 
 
 class TestSpawnedMockServer:
