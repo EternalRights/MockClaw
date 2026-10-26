@@ -449,14 +449,30 @@ class EnhancedChaosBreaker:
                 symbol = "PASS" if status == "passed" else "FAIL" if status == "failed" else "WARN"
                 print(f"  [{symbol}] {test_name}: {status}")
 
+            failed_tests = [
+                name for name, result in results.items()
+                if result.get("status") == "failed"
+            ]
+
             if self.failures:
                 print(f"\n{len(self.failures)} FAILURES:")
                 for f in self.failures:
                     print(f"  - {f}")
 
+            if failed_tests:
+                print("\nFAILED TESTS: " + ", ".join(failed_tests))
+
             summary = {
                 "total_tests": len(results),
-                "failures": len(self.failures),
+                # A test can report failure without logging a FAIL line: the
+                # latency benchmark answers "no_successful_requests" when
+                # every request raised. The exit code reads this count, so
+                # that run printed a [FAIL] row and still exited 0. The
+                # larger of the two counts keeps a failure only one side
+                # noticed, without counting a test twice when it both logged
+                # a line and reported itself as failed.
+                "failures": max(len(self.failures), len(failed_tests)),
+                "failed_tests": failed_tests,
                 "results": results,
             }
 

@@ -6,6 +6,7 @@ Covers the pure helper functions in scripts/enhanced_chaos_test.py
 deterministic, testable parts of the chaos engine.
 """
 
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -88,6 +89,52 @@ class TestExitCode:
         assert _exit_code({
             "status": "aborted", "total_tests": 0, "failures": 0, "results": {},
         }) == 1
+
+
+class TestSummaryFailureCount:
+    """A test that fails must make the whole run fail, however it reported.
+
+    ``failures`` counted FAIL log lines only. A test that returns a "failed"
+    status without logging one -- the latency benchmark answers
+    "no_successful_requests" when every request raised -- left the count at
+    zero, so the summary printed a [FAIL] row and the run still exited 0.
+    """
+
+    def _breaker(self, monkeypatch):
+        breaker = chaos.EnhancedChaosBreaker(base_url="http://127.0.0.1:1")
+        monkeypatch.setattr(breaker, "start_mock_server", lambda: True)
+        monkeypatch.setattr(breaker, "stop_mock_server", lambda: None)
+        return breaker
+
+    def test_a_failed_status_without_a_log_line_fails_the_run(self, monkeypatch):
+        breaker = self._breaker(monkeypatch)
+
+        async def failing_latency(num_requests: int = 30):
+            return {"status": "failed", "reason": "no_successful_requests"}
+
+        monkeypatch.setattr(breaker, "test_latency", failing_latency)
+
+        summary = asyncio.run(breaker.run_all_chaos_tests(only=["latency"]))
+
+        assert summary["failed_tests"] == ["latency"]
+        assert summary["failures"] == 1
+        assert _exit_code(summary) == 1
+
+    def test_a_logged_failure_is_still_counted_once(self, monkeypatch):
+        # A test that both logs a FAIL line and reports itself failed is one
+        # failing test, not two.
+        breaker = self._breaker(monkeypatch)
+
+        async def failing_garbage():
+            breaker.log("boom", "FAIL")
+            return {"status": "failed", "server_errors": 1}
+
+        monkeypatch.setattr(breaker, "test_garbage_data", failing_garbage)
+
+        summary = asyncio.run(breaker.run_all_chaos_tests(only=["garbage"]))
+
+        assert summary["failures"] == 1
+        assert _exit_code(summary) == 1
 
 
 class TestSpawnedMockServer:
