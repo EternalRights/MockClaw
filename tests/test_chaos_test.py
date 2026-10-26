@@ -183,7 +183,7 @@ class TestSpawnedMockServer:
     Windows -- and the server stopped answering partway through the suite).
     """
 
-    def _start(self, tmp_path, monkeypatch, wait_returns=True):
+    def _start(self, tmp_path, monkeypatch, wait_returns=True, base_url=None):
         mock_dir = tmp_path / "elsewhere" / "mocks"
         mock_dir.mkdir(parents=True)
         (mock_dir / "dynamic_api.py").write_text("app = None\n", encoding="utf-8")
@@ -204,7 +204,9 @@ class TestSpawnedMockServer:
         monkeypatch.setattr(chaos.subprocess, "Popen", _FakePopen)
         monkeypatch.chdir(tmp_path)
 
-        breaker = chaos.EnhancedChaosBreaker(mock_dir=str(mock_dir))
+        breaker = chaos.EnhancedChaosBreaker(
+            mock_dir=str(mock_dir), base_url=base_url or "http://localhost:8000",
+        )
         monkeypatch.setattr(breaker, "_wait_for_server", lambda: wait_returns)
         return breaker, captured, mock_dir
 
@@ -214,6 +216,18 @@ class TestSpawnedMockServer:
 
         env = captured["kwargs"]["env"]
         assert str(mock_dir.resolve().parent) in env["PYTHONPATH"].split(os.pathsep)
+
+    def test_the_spawned_server_listens_on_the_base_url_port(self, tmp_path, monkeypatch):
+        # --base-url with another port used to spawn the server on 8000
+        # anyway, so the health check polled a port nothing was listening on
+        # and the suite aborted once its timeout ran out.
+        breaker, captured, _ = self._start(
+            tmp_path, monkeypatch, base_url="http://127.0.0.1:9123",
+        )
+        assert breaker.start_mock_server() is True
+
+        argv = captured["args"][0]
+        assert argv[argv.index("--port") + 1] == "9123"
 
     def test_child_output_is_not_an_undrained_pipe(self, tmp_path, monkeypatch):
         breaker, captured, _ = self._start(tmp_path, monkeypatch)

@@ -15,6 +15,7 @@ import signal
 from pathlib import Path
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -162,6 +163,11 @@ class EnhancedChaosBreaker:
 
         try:
             module_path = f"{self.mock_dir.name}.dynamic_api:app"
+            # The port comes from --base-url. It used to be hardcoded to
+            # 8000, so a base URL on any other port started the server
+            # somewhere the health check never looked: the poll ran out its
+            # timeout and the suite aborted against a server that was up.
+            port = urlparse(self.base_url).port or 8000
             # The server imports the mock package by name, so the directory
             # *containing* it has to be importable -- and that has to be told
             # to the child. Adding it to this process's sys.path (as this did)
@@ -177,7 +183,7 @@ class EnhancedChaosBreaker:
             )
 
             self.server_process = subprocess.Popen(
-                [sys.executable, "-m", "uvicorn", module_path, "--host", "0.0.0.0", "--port", "8000"],
+                [sys.executable, "-m", "uvicorn", module_path, "--host", "0.0.0.0", "--port", str(port)],
                 # The server's output must go somewhere that cannot block it.
                 # With stdout/stderr as pipes and nothing reading them,
                 # uvicorn's per-request access log filled the OS pipe buffer
