@@ -1282,6 +1282,34 @@ class TestRecordedStatusReplay:
         assert "JSONResponse" not in route
         assert "return {" in route
 
+    @pytest.mark.parametrize("status_code", [204, 304])
+    def test_a_bodyless_status_carries_no_body(self, status_code):
+        # 204 and 304 must not carry content, and a capture of one has no
+        # body to replay: the parser stores None, the route builder turns it
+        # into "", and encoding that as JSON put two bytes -- a quoted empty
+        # string -- on a response that forbids a body at all.
+        route = build_route(
+            "DELETE", "/api/item", [{"status": status_code, "body": None}], "f",
+        )
+        assert f"Response(status_code={status_code})" in route
+        assert "JSONResponse" not in route
+
+        resp = _serve(route, "DELETE", "/api/item")
+        assert resp.status_code == status_code
+        assert resp.content == b""
+        assert "content-length" not in resp.headers
+
+    def test_a_bodyless_status_keeps_its_recorded_headers(self):
+        route = build_route(
+            "DELETE", "/api/item",
+            [{"status": 204, "body": None, "headers": {"etag": '"v1"'}}],
+            "f",
+        )
+        resp = _serve(route, "DELETE", "/api/item")
+        assert resp.status_code == 204
+        assert resp.headers["etag"] == '"v1"'
+        assert resp.content == b""
+
     def test_non_200_is_emitted_via_json_response(self):
         route = build_route(
             "POST", "/api/new", [{"status": 201, "body": '{"id": 7}'}], "f",

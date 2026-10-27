@@ -183,6 +183,13 @@ def _replayable_header_pairs(
     return replayable
 
 
+# Statuses whose responses must not carry content (RFC 9110). A capture of
+# one has no body to replay -- the parser stores None, and the callers turn
+# that into "" -- and encoding the "" as JSON sent two bytes, a quoted empty
+# string, on a response that is not allowed to have a body at all.
+_BODYLESS_STATUSES = frozenset({204, 304})
+
+
 def _replay_line(
     status: int,
     body_text: str,
@@ -229,6 +236,14 @@ def _replay_line(
             unique[name] = value
 
     header_arg = f", headers={_py_literal(unique)}" if unique else ""
+
+    if status in _BODYLESS_STATUSES:
+        # A body here is both fabricated and forbidden: the HAR had none to
+        # record. Starlette already drops content-length for these statuses,
+        # so a plain Response goes out with no content at all.
+        return _response_statements(
+            f"Response(status_code={status}{header_arg})", repeats, indent
+        )
 
     if not _is_json_content_type(content_type) or _has_non_finite_constant(body_text):
         media = content_type or "text/plain"
