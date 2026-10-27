@@ -185,6 +185,35 @@ class TestInfoCommand:
         data = json.loads(result.stdout)
         assert "mockclaw" in data
 
+    def test_info_reports_the_key_the_client_actually_reads(self, monkeypatch):
+        # LLMClientManager reads LLM_API_KEY first, so a run configured that
+        # way has an LLM. Reporting only OPENAI_API_KEY said "not set" and
+        # sent anyone debugging a template fallback the wrong way.
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("LLM_API_KEY", "sk-llm-1234")
+
+        data = json.loads(runner.invoke(app, ["info", "--json"]).stdout)
+
+        assert data["environment"]["LLM_API_KEY"] == "********1234"
+        assert "OPENAI_API_KEY" not in data["environment"]
+
+    def test_info_names_the_variable_that_won(self, monkeypatch):
+        monkeypatch.setenv("LLM_API_KEY", "sk-llm-1111")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-2222")
+
+        data = json.loads(runner.invoke(app, ["info", "--json"]).stdout)
+
+        assert data["environment"]["LLM_API_KEY"] == "********1111"
+        assert "OPENAI_API_KEY" not in data["environment"]
+
+    def test_info_reports_no_key_when_neither_variable_is_set(self, monkeypatch):
+        monkeypatch.delenv("LLM_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        data = json.loads(runner.invoke(app, ["info", "--json"]).stdout)
+
+        assert data["environment"] == {"LLM_API_KEY": None, "OPENAI_API_KEY": None}
+
 
 class TestVersionFlag:
     """Tests for the --version / -v flag."""

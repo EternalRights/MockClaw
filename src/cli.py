@@ -584,10 +584,20 @@ def info(
         except ImportError:
             info_data["dependencies"][pkg_name] = None
 
-    openai_key = os.getenv("OPENAI_API_KEY")
-    if openai_key:
-        info_data["environment"]["OPENAI_API_KEY"] = f"{'*' * 8}{openai_key[-4:]}"
+    # The client manager reads LLM_API_KEY first and falls back to
+    # OPENAI_API_KEY. Reporting only the second one told everyone who had
+    # configured the first that no key was set, while the generator was
+    # already calling the LLM with it.
+    llm_key_name = (
+        "LLM_API_KEY" if os.getenv("LLM_API_KEY")
+        else "OPENAI_API_KEY" if os.getenv("OPENAI_API_KEY")
+        else None
+    )
+    llm_key = os.getenv(llm_key_name) if llm_key_name else None
+    if llm_key:
+        info_data["environment"][llm_key_name] = f"{'*' * 8}{llm_key[-4:]}"
     else:
+        info_data["environment"]["LLM_API_KEY"] = None
         info_data["environment"]["OPENAI_API_KEY"] = None
 
     if json_output:
@@ -615,10 +625,10 @@ def info(
     console.print(table)
 
     console.print("\n[bold]Environment Variables:[/bold]")
-    if openai_key:
-        console.print(f"  OPENAI_API_KEY: [green]{'*' * 8}{openai_key[-4:]}[/green]")
+    if llm_key:
+        console.print(f"  {llm_key_name}: [green]{'*' * 8}{llm_key[-4:]}[/green]")
     else:
-        console.print(f"  OPENAI_API_KEY: [yellow]Not set (optional)[/yellow]")
+        console.print("  LLM_API_KEY / OPENAI_API_KEY: [yellow]Not set (optional)[/yellow]")
 
 
 @app.command()
